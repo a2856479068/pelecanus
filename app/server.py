@@ -26,7 +26,7 @@ from visual_review import review_pelican
 
 ROOT = Path(__file__).resolve().parent
 INTERVAL = 30 * 60
-LOCK_WAIT = 15
+LOCK_WAIT = 45
 MAX_RESPONSE = 2 * 1024 * 1024
 # ponytail: buffer SSE up to 16 MB; parse incrementally if concurrent streams strain memory.
 MAX_STREAM_RESPONSE = 16 * 1024 * 1024
@@ -1023,7 +1023,8 @@ def acquire_instance_lock(directory):
     """取得数据目录的独占锁，调用方需持有返回的文件对象，否则锁会随之释放。
 
     平台重建容器时旧实例可能还在停止过程中，宽限期内它仍然活着并持有锁，因此放弃
-    之前留出一段重试窗口，免得把能自愈的竞争变成部署失败。
+    之前留出一段重试窗口，免得把能自愈的竞争变成部署失败。窗口要盖过平台的停止宽限
+    期（Kubernetes 默认 30 秒），否则旧实例还没退干净，新实例就先放弃了。
     """
     instance_lock = (directory / "server.lock").open("a")
     deadline = time.monotonic() + LOCK_WAIT
@@ -1046,7 +1047,6 @@ def main():
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     # ponytail: one process owns scheduling; use a distributed lease before running multiple replicas.
     instance_lock = acquire_instance_lock(directory)
-    server = ThreadingHTTPServer((host, port), Handler)
     monitor = Monitor(directory)
     if token and not monitor.password_configured():
         # 只在初始化时校验；已设过密码的实例继续忽略 ADMIN_TOKEN，改坏了也不至于起不来。
@@ -1057,6 +1057,8 @@ def main():
     if host not in ("127.0.0.1", "localhost") and not monitor.password_configured():
         raise SystemExit("未设置管理密码：请通过 ADMIN_TOKEN 环境变量提供 12–256 个字符的初始密码后重新部署；"
                          "仅监听本机地址时也可以在页面上设置")
+    # 配置齐备之后才开端口，免得平台的健康探针先看到一个随即退出的服务。
+    server = ThreadingHTTPServer((host, port), Handler)
     server.monitor = monitor
     threading.Thread(target=monitor.scheduler, daemon=True).start()
     print(f"Pelican Watch: http://{host}:{port}", flush=True)
