@@ -13,7 +13,7 @@
         <div id="node-list" aria-live="polite"></div>
         <p class="field-note">更换当前节点不影响已发出的请求。后台同一时刻执行一轮检测，防止重复消耗额度。</p>
       </section>
-      <section class="panel settings-panel admin-settings run-monitor-panel" aria-labelledby="run-monitor-title"><div class="section-heading"><span class="number">02</span><div><h2 id="run-monitor-title">检测进度与历史</h2><p>实时查看正在执行的节点，并回顾最近 48 轮检测。</p></div></div><div id="admin-run-progress" class="admin-run-progress" role="status" aria-live="polite">暂无检测任务。</div><div id="admin-run-history" class="admin-run-history"></div></section>
+      <section class="panel settings-panel admin-settings run-monitor-panel" aria-labelledby="run-monitor-title"><div class="section-heading"><span class="number">02</span><div><h2 id="run-monitor-title">检测进度与历史</h2><p>实时查看正在执行的节点，并回顾最近 48 轮检测。</p></div></div><div id="admin-stats" class="admin-stats" aria-label="最近 24 小时统计"></div><div id="admin-run-progress" class="admin-run-progress" role="status" aria-live="polite">暂无检测任务。</div><div id="admin-run-history" class="admin-run-history"></div></section>
       <form id="admin-form" autocomplete="off" class="admin-layout system-form">
         <section class="panel settings-panel admin-settings"><div class="section-heading"><span class="number">03</span><div><h2>调度与系统配置</h2><p>新配置用于下一次请求，正在运行的请求不受影响。</p></div></div>
           <div class="admin-fields"><label for="interval">检测时间间隔 <span>分钟</span></label><input id="interval" name="interval_minutes" type="number" min="1" max="1440" step="1" required><p class="field-note">支持 1–1440 分钟。修改后按新间隔重新计算下次检测时间。</p>

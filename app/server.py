@@ -883,6 +883,27 @@ class Monitor:
             rows = db.execute("SELECT * FROM runs WHERE id < ? ORDER BY id DESC LIMIT 48", (before or 2**63-1,)).fetchall()
         return [self.serialize(row) for row in rows]
 
+    def stats(self):
+        since = time.time() - 86400
+        with self.db() as db:
+            total, passed, invalid, failed, running = db.execute("""
+                SELECT COUNT(*), COALESCE(SUM(status='passed'),0), COALESCE(SUM(status='invalid'),0),
+                       COALESCE(SUM(status='error'),0), COALESCE(SUM(status='running'),0)
+                FROM runs WHERE started>=?
+            """, (since,)).fetchone()
+            enabled_nodes = db.execute("SELECT COUNT(*) FROM nodes WHERE enabled=1 AND length(trim(api_key))>0").fetchone()[0]
+        return dict(window_hours=24, total=total, passed=passed, invalid=invalid,
+                    failed=failed, running=running, enabled_nodes=enabled_nodes)
+
+    def retry_run(self, run_id):
+        with self.db() as db:
+            row = db.execute("SELECT status,node_id FROM runs WHERE id=?", (run_id,)).fetchone()
+        if not row:
+            raise ValueError("检测记录不存在")
+        if row["status"] not in ("error", "invalid"):
+            raise ValueError("只有失败或校验未通过的记录可以重试")
+        return self.start_run(source="retry", node_id=row["node_id"])
+
     def gallery(self, page=1, status="all", protocol="all", source="all", effort="all",
                 has_svg="all", group_by="none"):
         allowed = {
@@ -1034,6 +1055,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send(monitor.nodes())
                 if url.path == "/api/admin/runs":
                     return self.send(monitor.runs())
+                if url.path == "/api/admin/stats":
+                    return self.send(monitor.stats())
             if url.path == "/api/state":
                 return self.send(monitor.state())
             if url.path == "/api/runs":
@@ -1119,6 +1142,9 @@ class Handler(BaseHTTPRequestHandler):
             node_toggle = re.fullmatch(r"/api/admin/nodes/([1-9]\d{0,17})/(enable|disable)", self.path)
             if node_toggle:
                 return self.send(self.server.monitor.set_node_enabled(int(node_toggle[1]), node_toggle[2] == "enable"))
+            retry = re.fullmatch(r"/api/admin/runs/([1-9]\d{0,17})/retry", self.path)
+            if retry:
+                return self.send({"id": self.server.monitor.retry_run(int(retry[1]))}, status=202)
             if self.path == "/api/admin/run":
                 return self.send({"id": self.server.monitor.start_run()}, status=202)
             if self.path == "/api/guest/run":

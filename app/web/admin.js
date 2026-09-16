@@ -1,7 +1,7 @@
 const $ = id => document.getElementById(id);
 let token = '', busy = false, config, setup = false, nodes = [], editingNode = null, nodeSignature = '';
 let nodeSearch = '', nodeStatus = 'all';
-let runHistory = [], batchRunIds = new Set();
+let runHistory = [], batchRunIds = new Set(), runStats;
 const selectedNodes = new Set();
 const labels = {passed:'双项通过', error:'请求失败', invalid:'校验未通过', running:'检测中', queued:'排队中', legacy:'历史单项'};
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -67,9 +67,11 @@ function renderRunMonitor() {
   const running = runHistory.filter(run => run.status === 'running');
   const summary = tracked.length ? `${finished.length}/${tracked.length} 已完成` : (running.length ? `${running.length} 个节点检测中` : '暂无检测任务');
   $('admin-run-progress').innerHTML = `<strong>${escapeHTML(summary)}</strong>${tracked.length ? `<progress max="${tracked.length}" value="${finished.length}" aria-label="批量检测进度"></progress>` : ''}${running.length ? `<span class="run-current">当前：${running.map(run => escapeHTML(run.node_name || `第 ${run.id} 轮`)).join('、')}</span>` : ''}`;
-  $('admin-run-history').innerHTML = runHistory.length ? `<h3>最近检测记录</h3>${runHistory.slice(0,12).map(run => `<div class="admin-history-row"><span class="badge ${escapeHTML(run.status)}">${escapeHTML(labels[run.status] || run.status)}</span><span>#${run.id} · ${escapeHTML(run.node_name || '历史节点')} · ${dateTime(run.started)}</span><a href="/?run=${run.id}" target="_blank" rel="noopener">查看 ↗</a></div>`).join('')}` : '<p class="field-note">暂无检测历史。</p>';
+  const statItems = runStats ? [['总计',runStats.total,'neutral'],['通过',runStats.passed,'passed'],['校验失败',runStats.invalid,'invalid'],['请求失败',runStats.failed,'error'],['启用节点',runStats.enabled_nodes,'running']] : [];
+  $('admin-stats').innerHTML = statItems.map(([name,value,tone]) => `<div><span>${name}</span><strong class="${tone}">${value}</strong></div>`).join('');
+  $('admin-run-history').innerHTML = runHistory.length ? `<h3>最近检测记录</h3>${runHistory.slice(0,12).map(run => `<div class="admin-history-row"><span class="badge ${escapeHTML(run.status)}">${escapeHTML(labels[run.status] || run.status)}</span><span>#${run.id} · ${escapeHTML(run.node_name || '历史节点')} · ${dateTime(run.started)}</span><a href="/?run=${run.id}" target="_blank" rel="noopener">查看 ↗</a>${['error','invalid'].includes(run.status) ? `<button class="button secondary" type="button" data-retry="${run.id}">重试</button>` : ''}</div>`).join('')}` : '<p class="field-note">暂无检测历史。</p>';
 }
-async function refreshRuns() { runHistory = await api('/api/admin/runs'); renderRunMonitor(); }
+async function refreshRuns() { [runHistory, runStats] = await Promise.all([api('/api/admin/runs'), api('/api/admin/stats')]); renderRunMonitor(); }
 function editNode(id = null) {
   const node = nodes.find(n => n.id === id);
   editingNode = id;
@@ -196,6 +198,16 @@ $('select-all-nodes').addEventListener('change', event => {
 });
 $('node-search').addEventListener('input', event => { nodeSearch = event.target.value.trim(); renderNodes(); });
 $('node-status-filter').addEventListener('change', event => { nodeStatus = event.target.value; renderNodes(); });
+$('admin-run-history').addEventListener('click', event => {
+  const button = event.target.closest('[data-retry]');
+  if (!button || busy) return;
+  action(async () => {
+    const result = await api(`/api/admin/runs/${button.dataset.retry}/retry`, {});
+    batchRunIds.add(result.id);
+    await Promise.all([refreshRuns(), refreshNodes()]);
+    message(`已创建重试检测 #${result.id}。`);
+  });
+});
 $('bulk-run').addEventListener('click', () => action(async () => {
   const ids = [...selectedNodes];
   let started = 0;
