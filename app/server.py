@@ -904,6 +904,22 @@ class Monitor:
             raise ValueError("只有失败或校验未通过的记录可以重试")
         return self.start_run(source="retry", node_id=row["node_id"])
 
+    def delete_runs(self, run_ids):
+        if not isinstance(run_ids, list) or not run_ids or len(run_ids) > 1000:
+            raise ValueError("请提供 1–1000 个检测记录编号")
+        if any(isinstance(run_id, bool) or type(run_id) is not int or run_id < 1 for run_id in run_ids):
+            raise ValueError("检测记录编号无效")
+        run_ids = list(dict.fromkeys(run_ids))
+        placeholders = ",".join("?" for _ in run_ids)
+        with self.lock, self.db() as db:
+            rows = db.execute(f"SELECT id,status FROM runs WHERE id IN ({placeholders})", run_ids).fetchall()
+            if len(rows) != len(run_ids):
+                raise ValueError("检测记录不存在")
+            if any(row["status"] == "running" for row in rows):
+                raise ValueError("检测正在运行，完成后才可以删除")
+            db.execute(f"DELETE FROM runs WHERE id IN ({placeholders})", run_ids)
+        return {"deleted": len(run_ids)}
+
     def gallery(self, page=1, status="all", protocol="all", source="all", effort="all",
                 has_svg="all", group_by="none"):
         allowed = {
@@ -1145,6 +1161,8 @@ class Handler(BaseHTTPRequestHandler):
             retry = re.fullmatch(r"/api/admin/runs/([1-9]\d{0,17})/retry", self.path)
             if retry:
                 return self.send({"id": self.server.monitor.retry_run(int(retry[1]))}, status=202)
+            if self.path == "/api/admin/runs/delete":
+                return self.send(self.server.monitor.delete_runs(values.get("ids")))
             if self.path == "/api/admin/run":
                 return self.send({"id": self.server.monitor.start_run()}, status=202)
             if self.path == "/api/guest/run":

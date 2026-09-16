@@ -69,7 +69,7 @@ function renderRunMonitor() {
   $('admin-run-progress').innerHTML = `<strong>${escapeHTML(summary)}</strong>${tracked.length ? `<progress max="${tracked.length}" value="${finished.length}" aria-label="批量检测进度"></progress>` : ''}${running.length ? `<span class="run-current">当前：${running.map(run => escapeHTML(run.node_name || `第 ${run.id} 轮`)).join('、')}</span>` : ''}`;
   const statItems = runStats ? [['总计',runStats.total,'neutral'],['通过',runStats.passed,'passed'],['校验失败',runStats.invalid,'invalid'],['请求失败',runStats.failed,'error'],['启用节点',runStats.enabled_nodes,'running']] : [];
   $('admin-stats').innerHTML = statItems.map(([name,value,tone]) => `<div><span>${name}</span><strong class="${tone}">${value}</strong></div>`).join('');
-  $('admin-run-history').innerHTML = runHistory.length ? `<h3>最近检测记录</h3>${runHistory.slice(0,12).map(run => `<div class="admin-history-row"><span class="badge ${escapeHTML(run.status)}">${escapeHTML(labels[run.status] || run.status)}</span><span>#${run.id} · ${escapeHTML(run.node_name || '历史节点')} · ${dateTime(run.started)}</span><a href="/?run=${run.id}" target="_blank" rel="noopener">查看 ↗</a>${['error','invalid'].includes(run.status) ? `<button class="button secondary" type="button" data-retry="${run.id}">重试</button>` : ''}</div>`).join('')}` : '<p class="field-note">暂无检测历史。</p>';
+  $('admin-run-history').innerHTML = runHistory.length ? `<h3>最近检测记录</h3>${runHistory.slice(0,12).map(run => `<div class="admin-history-row"><span class="badge ${escapeHTML(run.status)}">${escapeHTML(labels[run.status] || run.status)}</span><span>#${run.id} · ${escapeHTML(run.node_name || '历史节点')} · ${dateTime(run.started)}</span><a href="/?run=${run.id}" target="_blank" rel="noopener">查看 ↗</a>${['error','invalid'].includes(run.status) ? `<button class="button secondary" type="button" data-retry="${run.id}">重试</button>` : ''}${run.status !== 'running' ? `<button class="button secondary" type="button" data-delete-run="${run.id}">删除</button>` : ''}</div>`).join('')}` : '<p class="field-note">暂无检测历史。</p>';
 }
 async function refreshRuns() { [runHistory, runStats] = await Promise.all([api('/api/admin/runs'), api('/api/admin/stats')]); renderRunMonitor(); }
 function editNode(id = null) {
@@ -199,6 +199,11 @@ $('select-all-nodes').addEventListener('change', event => {
 $('node-search').addEventListener('input', event => { nodeSearch = event.target.value.trim(); renderNodes(); });
 $('node-status-filter').addEventListener('change', event => { nodeStatus = event.target.value; renderNodes(); });
 $('admin-run-history').addEventListener('click', event => {
+  const deleteButton = event.target.closest('[data-delete-run]');
+  if (deleteButton) {
+    if (busy || !confirm(`确认删除检测记录 #${deleteButton.dataset.deleteRun}？SVG 和历史展示也会一并移除。`)) return;
+    return action(async () => { await api('/api/admin/runs/delete', {ids:[Number(deleteButton.dataset.deleteRun)]}); await Promise.all([refreshRuns(), refreshNodes()]); message('检测记录已删除。'); });
+  }
   const button = event.target.closest('[data-retry]');
   if (!button || busy) return;
   action(async () => {
