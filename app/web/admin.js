@@ -1,5 +1,6 @@
 const $ = id => document.getElementById(id);
 let token = '', busy = false, config, setup = false, nodes = [], editingNode = null, nodeSignature = '';
+let nodeSearch = '', nodeStatus = 'all';
 const selectedNodes = new Set();
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 privacy.bind(document);
@@ -16,6 +17,14 @@ async function api(path, body) {
   return data;
 }
 function message(text, error = false) { $('admin-message').textContent = text; $('admin-message').classList.toggle('error',error); }
+function filteredNodes() {
+  return nodes.filter(n => {
+    const haystack = `${n.name} ${n.model} ${n.base_url}`.toLowerCase();
+    const matchesSearch = !nodeSearch || haystack.includes(nodeSearch.toLowerCase());
+    const matchesStatus = nodeStatus === 'all' || (nodeStatus === 'enabled' && n.enabled) || (nodeStatus === 'disabled' && !n.enabled) || (nodeStatus === 'unconfigured' && !n.has_key);
+    return matchesSearch && matchesStatus;
+  });
+}
 function showConfig(data) {
   config = data;
   $('interval').value = config.interval_minutes;
@@ -32,17 +41,22 @@ function showConfig(data) {
   $('admin-run').disabled = !config.has_key;
 }
 function renderNodes() {
-  const signature = JSON.stringify([nodes,busy,[...selectedNodes].sort((a,b) => a-b)]);
+  selectedNodes.forEach(id => { if (!nodes.some(n => n.id === id && n.enabled && n.has_key)) selectedNodes.delete(id); });
+  const filtered = filteredNodes();
+  const signature = JSON.stringify([nodes,busy,nodeSearch,nodeStatus,[...selectedNodes].sort((a,b) => a-b)]);
   if (signature === nodeSignature) return;
   nodeSignature = signature;
   const running = nodes.some(n => n.last_run?.status === 'running');
   const labels = {passed:'双项通过',error:'请求失败',invalid:'校验未通过',running:'检测中'};
-  $('node-list').innerHTML = nodes.map(n => `<article class="node-row ${n.active ? 'active-node' : ''}"><label class="node-select"><input type="checkbox" data-select="${n.id}" ${selectedNodes.has(n.id) ? 'checked' : ''} ${busy || !n.enabled || !n.has_key ? 'disabled' : ''}> 选择</label><div class="node-info"><h3>${escapeHTML(n.name)} ${n.active ? '<span class="badge passed">当前节点</span>' : ''} ${!n.enabled ? '<span class="badge neutral">已停用</span>' : ''}</h3><p>${escapeHTML(n.base_url)} · ${escapeHTML(n.model)} · ${escapeHTML(n.effort)} · ${n.protocol === 'responses' ? 'Responses' : 'Chat Completions'}</p><p>密钥 ${escapeHTML(n.api_key_masked)}</p></div><div class="node-actions"><button class="button secondary" type="button" data-edit="${n.id}" ${busy ? 'disabled' : ''}>编辑</button><button class="button secondary" type="button" data-copy="${n.id}" ${busy ? 'disabled' : ''}>复制</button><button class="button secondary" type="button" data-toggle="${n.id}" ${busy || (n.active && n.enabled) ? 'disabled' : ''}>${n.enabled ? '停用' : '启用'}</button><button class="button secondary" type="button" data-activate="${n.id}" ${busy || n.active || !n.enabled || !n.has_key ? 'disabled' : ''}>${n.active ? '使用中' : '设为当前'}</button><button class="button primary" type="button" data-test="${n.id}" ${busy || running || !n.enabled || !n.has_key ? 'disabled' : ''}>测试一次</button></div><div class="node-result">${n.last_run ? `<span class="badge ${escapeHTML(n.last_run.status)}">${labels[n.last_run.status] || '尚未检测'}</span><span>最近一轮 #${n.last_run.id} · ${new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(n.last_run.started*1000))}</span><a href="/?run=${n.last_run.id}" target="_blank" rel="noopener">查看结果 ↗</a>${n.last_run.error ? `<p>${escapeHTML(n.last_run.error)}</p>` : ''}` : '<span>尚未检测</span>'}</div></article>`).join('');
-  selectedNodes.forEach(id => { if (!nodes.some(n => n.id === id && n.enabled && n.has_key)) selectedNodes.delete(id); });
+  $('node-list').innerHTML = filtered.length ? filtered.map(n => `<article class="node-row ${n.active ? 'active-node' : ''}"><label class="node-select"><input type="checkbox" data-select="${n.id}" ${selectedNodes.has(n.id) ? 'checked' : ''} ${busy || !n.enabled || !n.has_key ? 'disabled' : ''}> 选择</label><div class="node-info"><h3>${escapeHTML(n.name)} ${n.active ? '<span class="badge passed">当前节点</span>' : ''} ${!n.enabled ? '<span class="badge neutral">已停用</span>' : ''}</h3><p>${escapeHTML(n.base_url)} · ${escapeHTML(n.model)} · ${escapeHTML(n.effort)} · ${n.protocol === 'responses' ? 'Responses' : 'Chat Completions'}</p><p>密钥 ${escapeHTML(n.api_key_masked)}</p></div><div class="node-actions"><button class="button secondary" type="button" data-edit="${n.id}" ${busy ? 'disabled' : ''}>编辑</button><button class="button secondary" type="button" data-copy="${n.id}" ${busy ? 'disabled' : ''}>复制</button><button class="button secondary" type="button" data-toggle="${n.id}" ${busy || (n.active && n.enabled) ? 'disabled' : ''}>${n.enabled ? '停用' : '启用'}</button><button class="button secondary" type="button" data-activate="${n.id}" ${busy || n.active || !n.enabled || !n.has_key ? 'disabled' : ''}>${n.active ? '使用中' : '设为当前'}</button><button class="button primary" type="button" data-test="${n.id}" ${busy || running || !n.enabled || !n.has_key ? 'disabled' : ''}>测试一次</button></div><div class="node-result">${n.last_run ? `<span class="badge ${escapeHTML(n.last_run.status)}">${labels[n.last_run.status] || '尚未检测'}</span><span>最近一轮 #${n.last_run.id} · ${new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(n.last_run.started*1000))}</span><a href="/?run=${n.last_run.id}" target="_blank" rel="noopener">查看结果 ↗</a>${n.last_run.error ? `<p>${escapeHTML(n.last_run.error)}</p>` : ''}` : '<span>尚未检测</span>'}</div></article>`).join('') : '<p class="filter-empty">没有符合当前筛选条件的节点。</p>';
   $('selected-node-count').textContent = `已选 ${selectedNodes.size} 个`;
   $('bulk-run').disabled = busy || !selectedNodes.size;
   $('admin-run').disabled = busy || running || !config?.has_key;
   $('add-node').disabled = busy;
+  const selectable = filtered.filter(n => n.enabled && n.has_key);
+  const selectedVisible = selectable.filter(n => selectedNodes.has(n.id)).length;
+  $('select-all-nodes').checked = selectable.length > 0 && selectedVisible === selectable.length;
+  $('select-all-nodes').indeterminate = selectedVisible > 0 && selectedVisible < selectable.length;
 }
 async function refreshNodes() { nodes = await api('/api/admin/nodes'); renderNodes(); }
 function editNode(id = null) {
@@ -165,17 +179,21 @@ $('logout').addEventListener('click', async () => {
   }
 });
 $('select-all-nodes').addEventListener('change', event => {
-  nodes.filter(n => n.enabled && n.has_key).forEach(n => event.target.checked ? selectedNodes.add(n.id) : selectedNodes.delete(n.id));
+  filteredNodes().filter(n => n.enabled && n.has_key).forEach(n => event.target.checked ? selectedNodes.add(n.id) : selectedNodes.delete(n.id));
   renderNodes();
 });
+$('node-search').addEventListener('input', event => { nodeSearch = event.target.value.trim(); renderNodes(); });
+$('node-status-filter').addEventListener('change', event => { nodeStatus = event.target.value; renderNodes(); });
 $('bulk-run').addEventListener('click', () => action(async () => {
   const ids = [...selectedNodes];
   let started = 0;
   let failed = 0;
+  const deadline = Date.now() + 30 * 60 * 1000;
   for (const id of ids) {
     try { await api(`/api/admin/nodes/${id}/run`, {}); started++; }
     catch (error) { failed++; if (started === 0) throw error; }
     while ((await api('/api/admin/nodes')).some(node => node.last_run?.status === 'running')) {
+      if (Date.now() > deadline) throw new Error('批量检测等待超时，请刷新页面查看已完成结果');
       await new Promise(resolve => setTimeout(resolve, 2000));
     }
   }

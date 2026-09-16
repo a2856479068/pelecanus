@@ -2,21 +2,22 @@
 <html lang="zh-CN">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>后台管理 · 鹈鹕观察站</title><link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/style.css"><script defer src="/privacy.js"></script><script defer src="/admin.js"></script></head>
 <body>
+  <a class="skip-link" href="#admin-content">跳到主要内容</a>
   <nav class="topbar" aria-label="主导航"><a class="brand" href="/"><img src="/favicon.svg" alt="" width="30" height="30">鹈鹕观察站 <span>ADMIN CONSOLE</span></a><div class="action-buttons"><button class="button secondary" id="logout" hidden>退出登录</button><a class="button secondary" href="/">返回公开页面 ↗</a></div></nav>
-  <main class="admin-main">
+  <main class="admin-main" id="main-content">
     <header class="page-head"><div><div class="eyebrow">SYSTEM SETTINGS <span>/ ADMIN</span></div><h1>后台检测，由你设定<span class="accent">。</span></h1><p>保存即生效，无需重启服务。公开页面只展示脱敏信息。</p></div><span class="badge neutral" id="admin-status">连接管理服务中</span></header>
     <div id="admin-content" hidden>
       <section class="panel settings-panel admin-settings nodes-panel" aria-labelledby="nodes-title">
-        <div class="nodes-heading"><div class="section-heading"><span class="number">01</span><div><h2 id="nodes-title">模型节点</h2><p>可复制节点、批量勾选检测；定时任务仍只使用当前节点。</p></div></div><div class="action-buttons"><button class="button secondary" type="button" id="bulk-run" disabled>检测所选节点</button><button class="button primary" type="button" id="add-node">＋ 新增节点</button></div></div>
-        <div class="nodes-toolbar"><label><input type="checkbox" id="select-all-nodes"> 全选可检测节点</label><span id="selected-node-count">已选 0 个</span></div>
+        <div class="nodes-heading"><div class="section-heading"><span class="number">01</span><div><h2 id="nodes-title">模型节点</h2><p>可复制节点、批量勾选检测；定时任务会按顺序检测所有已启用节点。</p></div></div><div class="action-buttons"><button class="button secondary" type="button" id="bulk-run" disabled>检测所选节点</button><button class="button primary" type="button" id="add-node">＋ 新增节点</button></div></div>
+        <div class="nodes-toolbar"><div class="node-filters"><label class="search-field" for="node-search"><span class="sr-only">搜索节点</span><input id="node-search" type="search" name="node_search" placeholder="搜索节点、模型或地址…" autocomplete="off"></label><label for="node-status-filter"><span class="sr-only">筛选节点状态</span><select id="node-status-filter" name="node_status"><option value="all">全部状态</option><option value="enabled">已启用</option><option value="disabled">已停用</option><option value="unconfigured">未配置密钥</option></select></label></div><label class="select-all-label"><input type="checkbox" id="select-all-nodes"> 全选当前结果</label><span id="selected-node-count">已选 0 个</span></div>
         <div id="node-list" aria-live="polite"></div>
         <p class="field-note">更换当前节点不影响已发出的请求。后台同一时刻执行一轮检测，防止重复消耗额度。</p>
       </section>
       <form id="admin-form" autocomplete="off" class="admin-layout system-form">
         <section class="panel settings-panel admin-settings"><div class="section-heading"><span class="number">02</span><div><h2>调度与系统配置</h2><p>新配置用于下一次请求，正在运行的请求不受影响。</p></div></div>
-          <div class="admin-fields"><label for="interval">检测时间间隔 <span>分钟</span></label><input id="interval" type="number" min="1" max="1440" step="1" required><p class="field-note">支持 1–1440 分钟。修改后按新间隔重新计算下次检测时间。</p>
-          <div class="form-row"><div><label for="timeout">后台请求超时 / 秒</label><input id="timeout" type="number" min="10" max="600" step="1" required></div><div><label for="max-tokens">后台输出 Token 上限</label><input id="max-tokens" type="number" min="1024" max="64000" step="1" required></div></div>
-          <label for="retry-count">后台失败重试次数</label><input id="retry-count" type="number" min="0" max="5" step="1" required><p class="field-note">默认重试 2 次，最多请求 3 次；仅重试临时请求故障，所有尝试共用本项超时预算。</p>
+          <div class="admin-fields"><label for="interval">检测时间间隔 <span>分钟</span></label><input id="interval" name="interval_minutes" type="number" min="1" max="1440" step="1" required><p class="field-note">支持 1–1440 分钟。修改后按新间隔重新计算下次检测时间。</p>
+          <div class="form-row"><div><label for="timeout">后台请求超时 / 秒</label><input id="timeout" name="timeout_seconds" type="number" min="10" max="600" step="1" required></div><div><label for="max-tokens">后台输出 Token 上限</label><input id="max-tokens" name="max_output_tokens" type="number" min="1024" max="64000" step="1" required></div></div>
+          <label for="retry-count">后台失败重试次数</label><input id="retry-count" name="retry_count" type="number" min="0" max="5" step="1" required><p class="field-note">默认重试 2 次，最多请求 3 次；仅重试临时请求故障，所有尝试共用本项超时预算。</p>
           <label class="toggle-row" for="admin-enabled"><span><b>启用后台自动检测</b><small>暂停后仍可由管理员单次检测</small></span><input type="checkbox" id="admin-enabled" role="switch"><span class="switch" aria-hidden="true"></span></label>
           <label class="toggle-row" for="guest-enabled"><span><b>开放访客独立测试</b><small>使用访客当次提交的接口和密钥</small></span><input type="checkbox" id="guest-enabled" role="switch"><span class="switch" aria-hidden="true"></span></label>
           <div class="admin-next"><span>下次后台检测</span><strong id="admin-next">尚未启用</strong><small>北京时间 UTC+8</small></div></div>

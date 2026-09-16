@@ -460,6 +460,8 @@ class Monitor:
         self.lock = threading.RLock()
         self.stopped = threading.Event()
         self.guest_queue = queue.Queue(maxsize=20)
+        # 定时检测队列：每个周期收集一次已启用节点，严格串行执行，避免同时消耗多个上游额度。
+        self.scheduled_queue = []
         self.guest_workers = []
         self.sessions = {}
         self.login_failures = []
@@ -679,8 +681,6 @@ class Monitor:
         with self.lock, self.db() as db:
             config = self.settings()
             if node_id is not None:
-                if source != "manual":
-                    raise ValueError("指定节点仅支持手动测试")
                 node = db.execute("SELECT * FROM nodes WHERE id=?", (node_id,)).fetchone()
                 if not node:
                     raise ValueError("节点不存在")
@@ -690,7 +690,8 @@ class Monitor:
                 config.update(active_node_id=node["id"], node_name=redact(node["name"], config))
             if not config["api_key"]:
                 raise ValueError("请先在检测设置中填写 API Key")
-            if source == "scheduled" and (not config["enabled"] or (config["next_run"] or float("inf")) > now):
+            # 调度器会为每个节点排队；只有不指定节点的旧式调用才读取全局 next_run。
+            if source == "scheduled" and (not config["enabled"] or (node_id is None and (config["next_run"] or float("inf")) > now)):
                 return None
             if db.execute("SELECT 1 FROM runs WHERE status='running'").fetchone():
                 if source == "scheduled":
@@ -701,7 +702,7 @@ class Monitor:
             row = db.execute("""INSERT INTO runs (started,status,source,model,base_url,effort,protocol,scene,nonce,prompt,test_version,tests,node_id,node_name)
                 VALUES (?,'running',?,?,?,?,?,?,?,?,2,?,?,?)""", (now, source, config["model"], config["base_url"], config["effort"], config["protocol"], scene, nonce, prompt, json.dumps({"pelican":{"status":"running"},"candy":{"status":"running"}}),config["active_node_id"],config["node_name"]))
             run_id = row.lastrowid
-            if source == "scheduled":
+            if source == "scheduled" and node_id is None:
                 config["next_run"] = next_slot(now, config["interval_minutes"] * 60)
                 self.store_settings(db, config)
         threading.Thread(target=self.execute, args=(run_id, config, prompt, nonce), daemon=True).start()
@@ -838,11 +839,42 @@ class Monitor:
         last_cleanup = 0
         while not self.stopped.wait(2):
             try:
-                if time.time()-last_cleanup > 60:
+                now = time.time()
+                if now-last_cleanup > 60:
                     self.prune_guests()
-                    last_cleanup = time.time()
-                if self.settings()["enabled"]:
-                    self.start_run("scheduled")
+                    last_cleanup = now
+
+                with self.lock, self.db() as db:
+                    settings = self.settings()
+                    if not settings["enabled"]:
+                        self.scheduled_queue.clear()
+                        continue
+                    if not self.scheduled_queue and (settings["next_run"] or float("inf")) <= now:
+                        self.scheduled_queue = [row["id"] for row in db.execute(
+                            "SELECT id FROM nodes WHERE enabled=1 AND length(trim(api_key))>0 ORDER BY id"
+                        ).fetchall()]
+                        # 保持 next_run 处于到期状态，直到本轮节点全部完成；这样服务重启不会丢掉未执行节点。
+                        if not self.scheduled_queue:
+                            settings["next_run"] = next_slot(now, settings["interval_minutes"] * 60)
+                            self.store_settings(db, settings)
+                    next_node = self.scheduled_queue[0] if self.scheduled_queue else None
+                    running = db.execute("SELECT 1 FROM runs WHERE status='running' LIMIT 1").fetchone()
+
+                if next_node is not None and not running:
+                    try:
+                        run_id = self.start_run("scheduled", now=now, node_id=next_node)
+                    except ValueError as exc:
+                        print(f"Scheduler node skipped: {type(exc).__name__}", flush=True)
+                        run_id = False
+                    if run_id is not None:
+                        with self.lock:
+                            if self.scheduled_queue and self.scheduled_queue[0] == next_node:
+                                self.scheduled_queue.pop(0)
+                                if not self.scheduled_queue:
+                                    with self.db() as db:
+                                        settings = self.settings()
+                                        settings["next_run"] = next_slot(now, settings["interval_minutes"] * 60)
+                                        self.store_settings(db, settings)
             except Exception as exc:
                 print(f"Scheduler error: {type(exc).__name__}", flush=True)
 
