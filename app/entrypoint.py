@@ -14,6 +14,10 @@ import sys
 RUNTIME_UID = 10001
 RUNTIME_GID = 10001
 DEFAULT_DATA_DIR = "/data"
+# 属主修复以 root 执行，误配置的 DATA_DIR 会把系统目录改掉属主，等于给业务进程留下提权口子。
+SYSTEM_DIRS = frozenset("""
+/ /app /bin /boot /dev /etc /home /lib /lib64 /media /mnt /opt /proc /root /run /sbin /srv /sys /usr /var
+""".split())
 
 
 def fail(message):
@@ -58,11 +62,23 @@ def ensure_writable(data_dir):
          "由本入口脚本修复属主后再降权运行。")
 
 
+def resolve_data_dir():
+    """解析数据目录，挡掉会让 root 递归 chown 破坏系统的取值。
+
+    DATA_DIR 是对外公开的配置项，误填成系统目录会把 /etc 之类的属主改成业务用户，
+    等于给服务进程留下改写 /etc/passwd 的机会，所以在动 chown 之前先拒掉。
+    """
+    data_dir = os.path.realpath(os.environ.get("DATA_DIR", DEFAULT_DATA_DIR))
+    if data_dir in SYSTEM_DIRS:
+        fail(f"DATA_DIR 不能指向系统目录（解析为 {data_dir}），请改用专用的数据目录")
+    return data_dir
+
+
 def main():
     command = sys.argv[1:]
     if not command:
         fail("入口脚本需要一个待执行的命令，例如：entrypoint.py python -u server.py")
-    data_dir = os.environ.get("DATA_DIR", DEFAULT_DATA_DIR)
+    data_dir = resolve_data_dir()
     if os.geteuid() == 0:
         take_ownership(data_dir)
         drop_privileges()

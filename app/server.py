@@ -13,6 +13,7 @@ import queue
 from pathlib import Path
 import re
 import secrets
+import signal
 import socket
 import sqlite3
 import ssl
@@ -952,7 +953,12 @@ class Handler(BaseHTTPRequestHandler):
         name = files.get(url.path)
         if name:
             types = {"html": "text/html", "js": "text/javascript", "css": "text/css", "svg": "image/svg+xml"}
-            return self.send((ROOT / "web" / name).read_bytes(), types[name.split(".")[-1]] + "; charset=utf-8")
+            data = (ROOT / "web" / name).read_bytes()
+            if name.endswith(".html"):
+                commit = os.environ.get("ZEABUR_GIT_COMMIT_SHA") or os.environ.get("GIT_COMMIT") or "dev"
+                commit = re.sub(r"[^0-9A-Za-z._-]", "", commit)[:12] or "dev"
+                data = data.replace(b"__GIT_COMMIT__", commit.encode())
+            return self.send(data, types[name.split(".")[-1]] + "; charset=utf-8")
         self.send({"error": "页面不存在"}, status=404)
 
     def do_POST(self):
@@ -1008,11 +1014,16 @@ class Handler(BaseHTTPRequestHandler):
             self.send({"error": str(exc)}, status=400)
 
 
+def _request_stop(*_):
+    """把 SIGTERM 转成 KeyboardInterrupt，走和 Ctrl-C 相同的收尾路径。"""
+    raise KeyboardInterrupt
+
+
 def acquire_instance_lock(directory):
     """取得数据目录的独占锁，调用方需持有返回的文件对象，否则锁会随之释放。
 
-    平台重建容器时旧进程可能仍在退出，锁要过一会儿才交还，因此放弃之前留出一段
-    重试窗口，免得把能自愈的竞争变成部署失败。
+    平台重建容器时旧实例可能还在停止过程中，宽限期内它仍然活着并持有锁，因此放弃
+    之前留出一段重试窗口，免得把能自愈的竞争变成部署失败。
     """
     instance_lock = (directory / "server.lock").open("a")
     deadline = time.monotonic() + LOCK_WAIT
@@ -1044,10 +1055,15 @@ def main():
                              "请修改环境变量后重新部署")
         monitor.setup_password(token)
     if host not in ("127.0.0.1", "localhost") and not monitor.password_configured():
-        raise SystemExit("请先在本机设置管理密码，或使用 ADMIN_TOKEN 初始化密码")
+        raise SystemExit("未设置管理密码：请通过 ADMIN_TOKEN 环境变量提供 12–256 个字符的初始密码后重新部署；"
+                         "仅监听本机地址时也可以在页面上设置")
     server.monitor = monitor
     threading.Thread(target=monitor.scheduler, daemon=True).start()
     print(f"Pelican Watch: http://{host}:{port}", flush=True)
+    # PID 1 不执行信号的默认处置，不接管 SIGTERM 就只能等平台宽限期结束后被 SIGKILL。
+    # 转成 KeyboardInterrupt 交给下面现成的退出路径；注意不能在这里调 server.shutdown()，
+    # 它必须由 serve_forever 之外的线程调用，从主线程调会死锁。
+    signal.signal(signal.SIGTERM, _request_stop)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -1055,6 +1071,7 @@ def main():
     finally:
         monitor.stopped.set()
         server.server_close()
+        instance_lock.close()
 
 
 if __name__ == "__main__":
