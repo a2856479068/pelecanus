@@ -853,7 +853,7 @@ class Monitor:
                         self.scheduled_queue = [row["id"] for row in db.execute(
                             "SELECT id FROM nodes WHERE enabled=1 AND length(trim(api_key))>0 ORDER BY id"
                         ).fetchall()]
-                        # 保持 next_run 处于到期状态，直到本轮节点全部完成；这样服务重启不会丢掉未执行节点。
+                        # 保持 next_run 处于到期状态，直到本轮节点全部完成；重启后会重新收集到期节点。
                         if not self.scheduled_queue:
                             settings["next_run"] = next_slot(now, settings["interval_minutes"] * 60)
                             self.store_settings(db, settings)

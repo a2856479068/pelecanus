@@ -172,7 +172,7 @@ $('auth-form').addEventListener('submit', async event => {
 $('logout').addEventListener('click', async () => {
   try { await api('/api/auth/logout',{}); }
   finally {
-    token = ''; config = undefined; nodes = []; nodeSignature = ''; $('node-list').replaceChildren();
+    token = ''; config = undefined; nodes = []; selectedNodes.clear(); nodeSignature = ''; $('node-list').replaceChildren();
     privacy.clear($('admin-url')); privacy.clear($('admin-key'));
     $('admin-content').hidden = true; $('logout').hidden = true;
     await load();
