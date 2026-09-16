@@ -1,5 +1,6 @@
 const $ = id => document.getElementById(id);
 let token = '', busy = false, config, setup = false, nodes = [], editingNode = null, nodeSignature = '';
+const selectedNodes = new Set();
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 privacy.bind(document);
 async function api(path, body) {
@@ -31,12 +32,15 @@ function showConfig(data) {
   $('admin-run').disabled = !config.has_key;
 }
 function renderNodes() {
-  const signature = JSON.stringify([nodes,busy]);
+  const signature = JSON.stringify([nodes,busy,[...selectedNodes].sort((a,b) => a-b)]);
   if (signature === nodeSignature) return;
   nodeSignature = signature;
   const running = nodes.some(n => n.last_run?.status === 'running');
   const labels = {passed:'双项通过',error:'请求失败',invalid:'校验未通过',running:'检测中'};
-  $('node-list').innerHTML = nodes.map(n => `<article class="node-row ${n.active ? 'active-node' : ''}"><div class="node-info"><h3>${escapeHTML(n.name)} ${n.active ? '<span class="badge passed">当前节点</span>' : ''}</h3><p>${escapeHTML(n.base_url)} · ${escapeHTML(n.model)} · ${escapeHTML(n.effort)} · ${n.protocol === 'responses' ? 'Responses' : 'Chat Completions'}</p><p>密钥 ${escapeHTML(n.api_key_masked)}</p></div><div class="node-actions"><button class="button secondary" type="button" data-edit="${n.id}" ${busy ? 'disabled' : ''}>编辑</button><button class="button secondary" type="button" data-activate="${n.id}" ${busy || n.active || !n.has_key ? 'disabled' : ''}>${n.active ? '使用中' : '设为当前'}</button><button class="button primary" type="button" data-test="${n.id}" ${busy || running || !n.has_key ? 'disabled' : ''}>测试一次</button></div><div class="node-result">${n.last_run ? `<span class="badge ${escapeHTML(n.last_run.status)}">${labels[n.last_run.status] || '尚未检测'}</span><span>最近一轮 #${n.last_run.id} · ${new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(n.last_run.started*1000))}</span><a href="/?run=${n.last_run.id}" target="_blank" rel="noopener">查看结果 ↗</a>${n.last_run.error ? `<p>${escapeHTML(n.last_run.error)}</p>` : ''}` : '<span>尚未检测</span>'}</div></article>`).join('');
+  $('node-list').innerHTML = nodes.map(n => `<article class="node-row ${n.active ? 'active-node' : ''}"><label class="node-select"><input type="checkbox" data-select="${n.id}" ${selectedNodes.has(n.id) ? 'checked' : ''} ${busy || !n.enabled || !n.has_key ? 'disabled' : ''}> 选择</label><div class="node-info"><h3>${escapeHTML(n.name)} ${n.active ? '<span class="badge passed">当前节点</span>' : ''} ${!n.enabled ? '<span class="badge neutral">已停用</span>' : ''}</h3><p>${escapeHTML(n.base_url)} · ${escapeHTML(n.model)} · ${escapeHTML(n.effort)} · ${n.protocol === 'responses' ? 'Responses' : 'Chat Completions'}</p><p>密钥 ${escapeHTML(n.api_key_masked)}</p></div><div class="node-actions"><button class="button secondary" type="button" data-edit="${n.id}" ${busy ? 'disabled' : ''}>编辑</button><button class="button secondary" type="button" data-copy="${n.id}" ${busy ? 'disabled' : ''}>复制</button><button class="button secondary" type="button" data-toggle="${n.id}" ${busy || (n.active && n.enabled) ? 'disabled' : ''}>${n.enabled ? '停用' : '启用'}</button><button class="button secondary" type="button" data-activate="${n.id}" ${busy || n.active || !n.enabled || !n.has_key ? 'disabled' : ''}>${n.active ? '使用中' : '设为当前'}</button><button class="button primary" type="button" data-test="${n.id}" ${busy || running || !n.enabled || !n.has_key ? 'disabled' : ''}>测试一次</button></div><div class="node-result">${n.last_run ? `<span class="badge ${escapeHTML(n.last_run.status)}">${labels[n.last_run.status] || '尚未检测'}</span><span>最近一轮 #${n.last_run.id} · ${new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(n.last_run.started*1000))}</span><a href="/?run=${n.last_run.id}" target="_blank" rel="noopener">查看结果 ↗</a>${n.last_run.error ? `<p>${escapeHTML(n.last_run.error)}</p>` : ''}` : '<span>尚未检测</span>'}</div></article>`).join('');
+  selectedNodes.forEach(id => { if (!nodes.some(n => n.id === id && n.enabled && n.has_key)) selectedNodes.delete(id); });
+  $('selected-node-count').textContent = `已选 ${selectedNodes.size} 个`;
+  $('bulk-run').disabled = busy || !selectedNodes.size;
   $('admin-run').disabled = busy || running || !config?.has_key;
   $('add-node').disabled = busy;
 }
@@ -62,11 +66,18 @@ $('add-node').addEventListener('click', () => editNode());
 $('node-cancel').addEventListener('click', () => $('node-dialog').close());
 $('node-dialog').addEventListener('close', () => { privacy.clear($('admin-url')); privacy.clear($('admin-key')); });
 $('node-list').addEventListener('click', event => {
+  const checkbox = event.target.closest('input[data-select]');
+  if (checkbox) { checkbox.checked ? selectedNodes.add(Number(checkbox.dataset.select)) : selectedNodes.delete(Number(checkbox.dataset.select)); renderNodes(); return; }
   const button = event.target.closest('button');
   if (!button || busy) return;
   if (button.dataset.edit) return editNode(Number(button.dataset.edit));
   action(async () => {
-    if (button.dataset.activate) {
+    if (button.dataset.copy) {
+      await api(`/api/admin/nodes/${button.dataset.copy}/copy`, {}); await refreshNodes(); message('节点副本已创建。');
+    } else if (button.dataset.toggle) {
+      const node = nodes.find(n => n.id === Number(button.dataset.toggle));
+      await api(`/api/admin/nodes/${button.dataset.toggle}/${node.enabled ? 'disable' : 'enable'}`, {}); await refreshNodes(); message(node.enabled ? '节点已停用。' : '节点已启用。');
+    } else if (button.dataset.activate) {
       showConfig(await api(`/api/admin/nodes/${button.dataset.activate}/activate`,{}));
       message(`已切换到「${config.node_name}」。${config.enabled ? '后续定时检测使用该节点。' : '自动检测仍处于暂停状态。'}`);
     } else if (button.dataset.test) {
@@ -153,5 +164,22 @@ $('logout').addEventListener('click', async () => {
     await load();
   }
 });
+$('select-all-nodes').addEventListener('change', event => {
+  nodes.filter(n => n.enabled && n.has_key).forEach(n => event.target.checked ? selectedNodes.add(n.id) : selectedNodes.delete(n.id));
+  renderNodes();
+});
+$('bulk-run').addEventListener('click', () => action(async () => {
+  const ids = [...selectedNodes];
+  let started = 0;
+  let failed = 0;
+  for (const id of ids) {
+    try { await api(`/api/admin/nodes/${id}/run`, {}); started++; }
+    catch (error) { failed++; if (started === 0) throw error; }
+    while ((await api('/api/admin/nodes')).some(node => node.last_run?.status === 'running')) {
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+  }
+  selectedNodes.clear(); $('select-all-nodes').checked = false; await refreshNodes(); message(`已提交 ${started} 个节点的检测${failed ? `，${failed} 个节点提交失败` : ''}；服务会按单实例锁顺序执行。`, failed > 0);
+}));
 load();
 setInterval(() => { if (token && !busy && !$('node-dialog').open) refreshNodes().catch(error => message(error.message,true)); }, 5000);

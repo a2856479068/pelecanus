@@ -7,7 +7,8 @@
     <header class="page-head"><div><div class="eyebrow">SYSTEM SETTINGS <span>/ ADMIN</span></div><h1>后台检测，由你设定<span class="accent">。</span></h1><p>保存即生效，无需重启服务。公开页面只展示脱敏信息。</p></div><span class="badge neutral" id="admin-status">连接管理服务中</span></header>
     <div id="admin-content" hidden>
       <section class="panel settings-panel admin-settings nodes-panel" aria-labelledby="nodes-title">
-        <div class="nodes-heading"><div class="section-heading"><span class="number">01</span><div><h2 id="nodes-title">模型节点</h2><p>一个当前节点负责定时检测。每个节点都可独立测试，单次测试不会切换当前节点。</p></div></div><button class="button primary" type="button" id="add-node">＋ 新增节点</button></div>
+        <div class="nodes-heading"><div class="section-heading"><span class="number">01</span><div><h2 id="nodes-title">模型节点</h2><p>可复制节点、批量勾选检测；定时任务仍只使用当前节点。</p></div></div><div class="action-buttons"><button class="button secondary" type="button" id="bulk-run" disabled>检测所选节点</button><button class="button primary" type="button" id="add-node">＋ 新增节点</button></div></div>
+        <div class="nodes-toolbar"><label><input type="checkbox" id="select-all-nodes"> 全选可检测节点</label><span id="selected-node-count">已选 0 个</span></div>
         <div id="node-list" aria-live="polite"></div>
         <p class="field-note">更换当前节点不影响已发出的请求。后台同一时刻执行一轮检测，防止重复消耗额度。</p>
       </section>

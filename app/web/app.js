@@ -123,15 +123,23 @@ async function attachImage(img, id) {
 
 function renderGallery() {
   const visible = records;
-  $('empty-state').hidden = galleryTotal > 0 || $('filter').value !== 'all';
-  $('filter-empty').hidden = galleryTotal > 0 || $('filter').value === 'all';
+  const filtered = ['filter', 'protocol-filter', 'source-filter', 'effort-filter', 'svg-filter']
+    .some(id => $(id).value !== 'all');
+  $('empty-state').hidden = galleryTotal > 0 || filtered;
+  $('filter-empty').hidden = galleryTotal > 0 || !filtered;
   $('gallery-page').textContent = `第 ${galleryPage} / ${galleryPages} 页 · 共 ${galleryTotal} 条`;
   $('previous-page').disabled = polling || galleryPage <= 1;
   $('next-page').disabled = polling || galleryPage >= galleryPages;
-  const signature = JSON.stringify(visible.map(r => [r.id, r.status, r.has_svg, r.finished, r.tests]));
+  const signature = JSON.stringify([$('group-filter').value, visible.map(r => [r.id, r.status, r.has_svg, r.finished, r.tests, r.group_key])]);
   if ($('gallery').dataset.signature === signature) return;
   $('gallery').dataset.signature = signature;
-  $('gallery').innerHTML = visible.map(r => `<article class="run-card"><button class="preview" data-run="${r.id}" aria-label="${escapeHTML(date(r.started) + ' ' + r.scene)}，查看检测详情">${r.has_svg ? `<img data-image="${r.id}" alt="${escapeHTML(r.scene)} · 模型生成的鹈鹕骑行" loading="lazy">` : `<span class="no-preview ${escapeHTML(r.status)}"><b aria-hidden="true">${r.status === 'running' ? '◌' : '↯'}</b>${r.status === 'running' ? '模型正在创作' : '本轮未生成可展示动画'}</span>`}<span class="overlay">查看详情 ↗</span></button><div class="card-body"><div class="card-top"><time>${date(r.started)}</time>${badge(r.status)}</div>${testSummary(r.tests)}<p>节点：${escapeHTML(r.node_name || '历史节点')}</p><p>场景：${escapeHTML(r.scene)}</p><p class="card-model">${escapeHTML(r.model)} · ${escapeHTML(r.effort)} · ${r.finished ? `${Math.max(0, r.finished-r.started).toFixed(1)}s` : '进行中'}</p><p>${r.source === 'manual' ? '手动检测' : '定时检测'} · 校验码 ${r.checks.nonce ? '一致' : r.status === 'running' ? '待核对' : '未通过'}</p></div></article>`).join('');
+  let lastGroup = null;
+  $('gallery').innerHTML = visible.map(r => {
+    const heading = $('group-filter').value !== 'none' && r.group_key !== lastGroup
+      ? `<h3 class="gallery-group-title">${escapeHTML(r.group_key)}<span>${visible.filter(item => item.group_key === r.group_key).length} 条</span></h3>` : '';
+    lastGroup = r.group_key;
+    return heading + `<article class="run-card"><button class="preview" data-run="${r.id}" aria-label="${escapeHTML(date(r.started) + ' ' + r.scene)}，查看检测详情">${r.has_svg ? `<img data-image="${r.id}" alt="${escapeHTML(r.scene)} · 模型生成的鹈鹕骑行" loading="lazy">` : `<span class="no-preview ${escapeHTML(r.status)}"><b aria-hidden="true">${r.status === 'running' ? '◌' : '↯'}</b>${r.status === 'running' ? '模型正在创作' : '本轮未生成可展示动画'}</span>`}<span class="overlay">查看详情 ↗</span></button><div class="card-body"><div class="card-top"><time>${date(r.started)}</time>${badge(r.status)}</div>${testSummary(r.tests)}<p>节点：${escapeHTML(r.node_name || '历史节点')}</p><p>场景：${escapeHTML(r.scene)}</p><p class="card-model">${escapeHTML(r.model)} · ${escapeHTML(r.effort)} · ${r.finished ? `${Math.max(0, r.finished-r.started).toFixed(1)}s` : '进行中'}</p><p>${r.source === 'manual' ? '手动检测' : '定时检测'} · 校验码 ${r.checks.nonce ? '一致' : r.status === 'running' ? '待核对' : '未通过'}</p></div></article>`;
+  }).join('');
   $('gallery').querySelectorAll('[data-run]').forEach(button => button.addEventListener('click', () => showDetail(Number(button.dataset.run))));
   $('gallery').querySelectorAll('.preview').forEach((button, i) => button.insertAdjacentHTML('beforeend', qualityTag(visible[i].tests)));
   $('gallery').querySelectorAll('[data-image]').forEach(img => attachImage(img, Number(img.dataset.image)));
@@ -167,9 +175,11 @@ async function showDetail(id) {
 async function refresh(page = galleryPage) {
   if (polling) return;
   polling = true;
-  $('refresh').disabled = true; $('previous-page').disabled = true; $('next-page').disabled = true; $('filter').disabled = true;
+  $('refresh').disabled = true; $('previous-page').disabled = true; $('next-page').disabled = true;
+  document.querySelectorAll('.gallery-filters select').forEach(select => select.disabled = true);
   try {
-    const [newState, fresh, guests] = await Promise.all([api('/api/state'), api(`/api/runs?page=${page}&status=${encodeURIComponent($('filter').value)}`), api('/api/guest/results')]);
+    const query = new URLSearchParams({page, status:$('filter').value, protocol:$('protocol-filter').value, source:$('source-filter').value, effort:$('effort-filter').value, has_svg:$('svg-filter').value, group_by:$('group-filter').value});
+    const [newState, fresh, guests] = await Promise.all([api('/api/state'), api(`/api/runs?${query}`), api('/api/guest/results')]);
     renderGuestResults(guests);
     state = newState;
     clockOffset = state.server_time - Date.now()/1000;
@@ -181,7 +191,7 @@ async function refresh(page = galleryPage) {
   } catch (error) {
     $('connection').textContent = error.message === '请输入管理口令' ? '等待解锁' : '服务连接失败';
     $('connection').className = 'connection offline';
-  } finally { polling = false; $('refresh').disabled = false; $('filter').disabled = false; renderGallery(); }
+  } finally { polling = false; $('refresh').disabled = false; document.querySelectorAll('.gallery-filters select').forEach(select => select.disabled = false); renderGallery(); }
 }
 
 privacy.bind(document);
@@ -240,6 +250,11 @@ function addGuestResult(result) {
 
 $('refresh').addEventListener('click', () => refresh());
 $('filter').addEventListener('change', () => refresh(1));
+$('protocol-filter').addEventListener('change', () => refresh(1));
+$('source-filter').addEventListener('change', () => refresh(1));
+$('effort-filter').addEventListener('change', () => refresh(1));
+$('svg-filter').addEventListener('change', () => refresh(1));
+$('group-filter').addEventListener('change', () => refresh(1));
 $('previous-page').addEventListener('click', () => refresh(galleryPage - 1));
 $('next-page').addEventListener('click', () => refresh(galleryPage + 1));
 $('close-detail').addEventListener('click', () => { detailSequence++; $('detail-dialog').close(); });

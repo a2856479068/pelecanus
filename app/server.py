@@ -470,7 +470,8 @@ class Monitor:
                     id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE CHECK(length(name) BETWEEN 1 AND 60),
                     base_url TEXT NOT NULL, api_key TEXT NOT NULL, model TEXT NOT NULL,
                     effort TEXT NOT NULL, protocol TEXT NOT NULL,
-                    active INTEGER NOT NULL DEFAULT 0 CHECK(active IN (0,1)));
+                    active INTEGER NOT NULL DEFAULT 0 CHECK(active IN (0,1)),
+                    enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)));
                 CREATE UNIQUE INDEX IF NOT EXISTS one_active_node ON nodes(active) WHERE active=1;
                 CREATE TABLE IF NOT EXISTS runs (
                     id INTEGER PRIMARY KEY, started REAL NOT NULL, finished REAL,
@@ -497,11 +498,14 @@ class Monitor:
             if "node_id" not in columns:
                 db.execute("ALTER TABLE runs ADD COLUMN node_id INTEGER REFERENCES nodes(id)")
                 db.execute("ALTER TABLE runs ADD COLUMN node_name TEXT NOT NULL DEFAULT ''")
+            node_columns = {r[1] for r in db.execute("PRAGMA table_info(nodes)")}
+            if "enabled" not in node_columns:
+                db.execute("ALTER TABLE nodes ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1))")
             db.execute("CREATE INDEX IF NOT EXISTS runs_node ON runs(node_id,id)")
             db.execute("INSERT OR IGNORE INTO settings VALUES (1, ?)", (json.dumps(DEFAULTS),))
             config = dict(DEFAULTS, **json.loads(db.execute("SELECT value FROM settings WHERE id=1").fetchone()[0]))
             if not db.execute("SELECT 1 FROM nodes").fetchone():
-                db.execute("INSERT INTO nodes(name,base_url,api_key,model,effort,protocol,active) VALUES (?,?,?,?,?,?,1)",
+                db.execute("INSERT INTO nodes(name,base_url,api_key,model,effort,protocol,active,enabled) VALUES (?,?,?,?,?,?,1,1)",
                            ("默认节点", *(config[key] for key in NODE_FIELDS)))
             self.store_settings(db, config)
             for row in db.execute("SELECT id,tests FROM runs WHERE status='running'").fetchall():
@@ -594,12 +598,12 @@ class Monitor:
             latest = {r["node_id"]:dict(r) for r in db.execute("SELECT id,node_id,status,started,finished,error FROM runs WHERE id IN (SELECT MAX(id) FROM runs WHERE node_id IS NOT NULL GROUP BY node_id)")}
         return [dict(id=row["id"], name=redact(row["name"], dict(row)), active=bool(row["active"]),
                      base_url=mask_url(row["base_url"]), has_key=bool(row["api_key"]),
-                     api_key_masked=mask(row["api_key"]) if row["api_key"] else "尚未配置",
+                     api_key_masked=mask(row["api_key"]) if row["api_key"] else "尚未配置", enabled=bool(row["enabled"]),
                      model=redact(row["model"], dict(row)), effort=row["effort"], protocol=row["protocol"],
                      last_run=latest.get(row["id"])) for row in rows]
 
     def save_node(self, values, node_id=None):
-        if not isinstance(values, dict) or set(values) - {"name", *NODE_FIELDS}:
+        if not isinstance(values, dict) or set(values) - {"name", *NODE_FIELDS, "enabled"}:
             raise ValueError("节点字段不正确")
         name = values.get("name", "")
         if not isinstance(name, str) or not 1 <= len(name.strip()) <= 60 or any(ord(c)<32 for c in name):
@@ -608,24 +612,54 @@ class Monitor:
             old = db.execute("SELECT * FROM nodes WHERE id=?", (node_id,)).fetchone() if node_id is not None else None
             if node_id is not None and not old:
                 raise ValueError("节点不存在")
+            enabled = values.get("enabled", bool(old["enabled"]) if old else True)
+            if not isinstance(enabled, bool):
+                raise ValueError("节点启用状态必须为布尔值")
             if old is None and any(not isinstance(values.get(k), str) or not values[k].strip() for k in ("base_url", "api_key")):
                 raise ValueError("新增节点需填写 API 地址和 API Key")
             config = validate_settings(values, dict(DEFAULTS, **({k:old[k] for k in NODE_FIELDS} if old else {})))
             fields = (name.strip(), *(config[k] for k in NODE_FIELDS))
             try:
                 if old:
-                    db.execute("UPDATE nodes SET name=?,base_url=?,api_key=?,model=?,effort=?,protocol=? WHERE id=?", (*fields,node_id))
+                    db.execute("UPDATE nodes SET name=?,base_url=?,api_key=?,model=?,effort=?,protocol=?,enabled=? WHERE id=?", (*fields,enabled,node_id))
                 else:
-                    node_id = db.execute("INSERT INTO nodes(name,base_url,api_key,model,effort,protocol) VALUES (?,?,?,?,?,?)", fields).lastrowid
+                    node_id = db.execute("INSERT INTO nodes(name,base_url,api_key,model,effort,protocol,enabled) VALUES (?,?,?,?,?,?,?)", (*fields,enabled)).lastrowid
             except sqlite3.IntegrityError:
                 raise ValueError("节点名称已存在，请使用其他名称") from None
         return next(n for n in self.nodes() if n["id"] == node_id)
+
+    def copy_node(self, node_id):
+        with self.lock, self.db() as db:
+            node = db.execute("SELECT * FROM nodes WHERE id=?", (node_id,)).fetchone()
+            if not node:
+                raise ValueError("节点不存在")
+            base = f"{node['name']}（副本）"
+            name, suffix = base, 2
+            while db.execute("SELECT 1 FROM nodes WHERE name=?", (name,)).fetchone():
+                name, suffix = f"{base} {suffix}", suffix + 1
+            new_id = db.execute("INSERT INTO nodes(name,base_url,api_key,model,effort,protocol,enabled) VALUES (?,?,?,?,?,?,?)",
+                                (name, *(node[key] for key in NODE_FIELDS), node["enabled"])).lastrowid
+        return next(n for n in self.nodes() if n["id"] == new_id)
+
+    def set_node_enabled(self, node_id, enabled):
+        with self.lock, self.db() as db:
+            node = db.execute("SELECT * FROM nodes WHERE id=?", (node_id,)).fetchone()
+            if not node:
+                raise ValueError("节点不存在")
+            if not enabled and node["active"]:
+                raise ValueError("当前节点不能停用，请先切换到其他已启用节点")
+            if enabled and not node["api_key"]:
+                raise ValueError("请先为该节点配置 API Key")
+            db.execute("UPDATE nodes SET enabled=? WHERE id=?", (int(enabled), node_id))
+        return self.nodes()
 
     def activate_node(self, node_id):
         with self.lock, self.db() as db:
             node = db.execute("SELECT * FROM nodes WHERE id=?", (node_id,)).fetchone()
             if not node:
                 raise ValueError("节点不存在")
+            if not node["enabled"]:
+                raise ValueError("该节点已停用，请先启用后再设为当前")
             if not node["api_key"]:
                 raise ValueError("请先为该节点配置 API Key")
             db.execute("UPDATE nodes SET active=0 WHERE active=1")
@@ -650,6 +684,8 @@ class Monitor:
                 node = db.execute("SELECT * FROM nodes WHERE id=?", (node_id,)).fetchone()
                 if not node:
                     raise ValueError("节点不存在")
+                if not node["enabled"]:
+                    raise ValueError("该节点已停用")
                 config.update({key:node[key] for key in NODE_FIELDS})
                 config.update(active_node_id=node["id"], node_name=redact(node["name"], config))
             if not config["api_key"]:
@@ -815,20 +851,51 @@ class Monitor:
             rows = db.execute("SELECT * FROM runs WHERE id < ? ORDER BY id DESC LIMIT 48", (before or 2**63-1,)).fetchall()
         return [self.serialize(row) for row in rows]
 
-    def gallery(self, page=1, status="all"):
-        if type(page) is not int or not 1 <= page <= 1000000 or status not in ("all","passed","invalid","error","running","legacy"):
+    def gallery(self, page=1, status="all", protocol="all", source="all", effort="all",
+                has_svg="all", group_by="none"):
+        allowed = {
+            "status": ("all", "passed", "invalid", "error", "running", "legacy"),
+            "protocol": ("all", "responses", "chat"),
+            "source": ("all", "manual", "scheduled"),
+            "effort": ("all", "low", "medium", "high", "xhigh"),
+            "has_svg": ("all", "yes", "no"),
+            "group_by": ("none", "node", "model", "date"),
+        }
+        values = locals()
+        if type(page) is not int or not 1 <= page <= 1000000 or any(
+            values[key] not in options for key, options in allowed.items()
+        ):
             raise ValueError("画廊分页或筛选参数无效")
-        where, args = "", []
+        clauses, args = [], []
         if status == "legacy":
-            where = " WHERE test_version=1"
+            clauses.append("test_version = 1")
         elif status != "all":
-            where, args = " WHERE test_version>=2 AND status=?", [status]
+            clauses.extend(("test_version >= 2", "status = ?"))
+            args.append(status)
+        for column, value in (("protocol", protocol), ("source", source), ("effort", effort)):
+            if value != "all":
+                clauses.append(f"{column} = ?")
+                args.append(value)
+        if has_svg != "all":
+            clauses.append("length(svg) > 0" if has_svg == "yes" else "(svg IS NULL OR length(svg) = 0)")
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        group_expression = {
+            "node": "COALESCE(NULLIF(node_name, ''), '历史节点')",
+            "model": "model",
+            "date": "strftime('%Y-%m-%d', started, 'unixepoch', '+8 hours')",
+        }.get(group_by)
         with self.db() as db:
             total = db.execute("SELECT COUNT(*) FROM runs"+where,args).fetchone()[0]
             pages = max(1, math.ceil(total/12))
             page = min(page,pages)
-            rows = db.execute("SELECT * FROM runs"+where+" ORDER BY id DESC LIMIT 12 OFFSET ?",[*args,(page-1)*12]).fetchall()
-        return dict(items=[self.serialize(row) for row in rows],total=total,page=page,pages=pages)
+            order = f"{group_expression} ASC, id DESC" if group_expression else "id DESC"
+            rows = db.execute("SELECT * FROM runs"+where+f" ORDER BY {order} LIMIT 12 OFFSET ?",[*args,(page-1)*12]).fetchall()
+        items = [self.serialize(row) for row in rows]
+        for item in items:
+            item["group_key"] = ((item.get("node_name") or "历史节点") if group_by == "node" else
+                                  item.get("model") if group_by == "model" else
+                                  time.strftime("%Y-%m-%d", time.gmtime(item["started"] + 8 * 3600)) if group_by == "date" else None)
+        return dict(items=items,total=total,page=page,pages=pages,group_by=group_by)
 
     @staticmethod
     def serialize(row, detail=False):
@@ -932,7 +999,11 @@ class Handler(BaseHTTPRequestHandler):
                 params = parse.parse_qs(url.query)
                 if "page" in params:
                     try:
-                        return self.send(monitor.gallery(int(params["page"][0]), params.get("status",["all"])[0]))
+                        return self.send(monitor.gallery(
+                            page=int(params["page"][0]), status=params.get("status", ["all"])[0],
+                            protocol=params.get("protocol", ["all"])[0], source=params.get("source", ["all"])[0],
+                            effort=params.get("effort", ["all"])[0], has_svg=params.get("has_svg", ["all"])[0],
+                            group_by=params.get("group_by", ["none"])[0]))
                     except ValueError:
                         return self.send({"error":"画廊分页或筛选参数无效"},status=400)
                 before = parse.parse_qs(url.query).get("before", [None])[0]
@@ -1001,6 +1072,12 @@ class Handler(BaseHTTPRequestHandler):
                 if node_action[2] == "run":
                     return self.send({"id":self.server.monitor.start_run(node_id=node_id)}, status=202)
                 return self.send(self.server.monitor.save_node(values,node_id))
+            node_copy = re.fullmatch(r"/api/admin/nodes/([1-9]\d{0,17})/copy", self.path)
+            if node_copy:
+                return self.send(self.server.monitor.copy_node(int(node_copy[1])), status=201)
+            node_toggle = re.fullmatch(r"/api/admin/nodes/([1-9]\d{0,17})/(enable|disable)", self.path)
+            if node_toggle:
+                return self.send(self.server.monitor.set_node_enabled(int(node_toggle[1]), node_toggle[2] == "enable"))
             if self.path == "/api/admin/run":
                 return self.send({"id": self.server.monitor.start_run()}, status=202)
             if self.path == "/api/guest/run":
