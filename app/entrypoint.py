@@ -1,12 +1,12 @@
 """容器入口：必要时修复数据目录属主并降权，再把 PID 1 交给业务进程。
 
 Kubernetes（Zeabur 即基于此）挂载持久卷时，挂载点属主由平台决定，通常是 root，
-会盖掉镜像里预设好的属主。镜像以非 root 的 monitor 运行，直接启动就会在写入
+会盖掉镜像里预设好的属主。业务服务以非 root 的 monitor 运行，直接启动就会在写入
 数据目录时失败。本脚本在拿得到 root 时修复属主后降权；拿不到 root 时先做一次
 体检，把晦涩的 PermissionError 换成可操作的提示。
 
-Docker Compose 下镜像的 USER 指令生效，进程本就不是 root，走体检分支后行为与
-未引入本脚本时完全一致。
+Docker Compose 同样会先以 root 运行入口，再降权执行服务；因此挂载命名卷和托管平台
+持久卷使用同一套权限处理逻辑。
 """
 import os
 import sys
