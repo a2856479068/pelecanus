@@ -71,12 +71,14 @@ def ensure_writable(data_dir):
 def resolve_data_dir():
     """解析数据目录，挡掉会让 root 递归 chown 破坏系统的取值。
 
-    DATA_DIR 是对外公开的配置项，误填成系统目录会把 /etc 之类的属主改成业务用户，
-    等于给服务进程留下改写 /etc/passwd 的机会，所以在动 chown 之前先拒掉。
+    DATA_DIR 是对外公开的配置项，误填成系统路径会把属主改成业务用户，等于给服务进程
+    留下改写 /etc/passwd 之类的机会。按顶层目录判断而不是逐个精确匹配，否则
+    /etc/nginx、/var/lib/docker 这些子路径会从清单的缝里漏过去。
     """
     data_dir = os.path.realpath(os.environ.get("DATA_DIR", DEFAULT_DATA_DIR))
-    if data_dir in SYSTEM_DIRS:
-        fail(f"DATA_DIR 不能指向系统目录（解析为 {data_dir}），请改用专用的数据目录")
+    top_level = "/" + data_dir.strip("/").split("/")[0]
+    if top_level in SYSTEM_DIRS:
+        fail(f"DATA_DIR 不能落在系统目录下（解析为 {data_dir}），请改用 /data 这样的专用目录")
     return data_dir
 
 
@@ -90,7 +92,8 @@ def main():
         drop_privileges()
     else:
         ensure_writable(data_dir)
-    # 用 execvp 顶替当前进程，业务进程才能接管 PID 1 并直接收到容器停止时的 SIGTERM。
+    # 用 execvp 顶替当前进程，让业务进程直接成为 PID 1。PID 1 只收得到自己注册过
+    # handler 的信号，容器停止时的 SIGTERM 由 server.py 接管，不然只能等着被 SIGKILL。
     os.execvp(command[0], command)
 
 

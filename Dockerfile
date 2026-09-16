@@ -18,7 +18,10 @@ RUN pip install --no-cache-dir -r requirements.txt \
 COPY app/server.py app/visual_review.py app/render_frames.py app/entrypoint.py ./
 COPY app/web ./web
 
-RUN useradd --system --uid 10001 monitor \
+# 显式建组：useradd 只认 --uid，组号会另外分配（10001 超出系统组区间，实际会落到 101），
+# 那样镜像里的 chown 和入口脚本的 chown 就会给同一个目录两个不同的组。
+RUN groupadd --system --gid 10001 monitor \
+    && useradd --system --uid 10001 --gid 10001 monitor \
     && mkdir /data \
     && chown monitor:monitor /data
 
