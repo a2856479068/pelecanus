@@ -85,8 +85,8 @@ docker run -d \
 其端口会绑定到 `127.0.0.1`；托管平台请使用上方的根目录 `Dockerfile`。Windows 用户请使用 Linux 容器。
 
 ```sh
-git clone https://github.com/w1196396546/manxue-ai.git
-cd manxue-ai
+git clone https://github.com/fishxcode/pelecanus.git
+cd pelecanus
 ```
 
 首次启动前必须通过 `ADMIN_TOKEN` 设置 12–256 字符的管理密码；未设置时服务不会完成初始化。

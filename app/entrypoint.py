@@ -18,6 +18,9 @@ DEFAULT_DATA_DIR = "/data"
 SYSTEM_DIRS = frozenset("""
 / /app /bin /boot /dev /etc /home /lib /lib64 /media /mnt /opt /proc /root /run /sbin /srv /sys /usr /var
 """.split())
+# 路径黑名单靠精确匹配，挡不住它没列全的目录；数据目录正常只有数据库和锁文件，
+# 条目数远超预期就说明 DATA_DIR 指错了位置，这里在动手改属主之前兜一道。
+MAX_OWNED_PATHS = 1000
 
 
 def fail(message):
@@ -34,6 +37,9 @@ def take_ownership(data_dir):
     paths = [data_dir]
     for parent, directories, files in os.walk(data_dir):
         paths.extend(os.path.join(parent, name) for name in (*directories, *files))
+    if len(paths) > MAX_OWNED_PATHS:
+        fail(f"数据目录 {data_dir} 下有 {len(paths)} 个条目，超过预期上限 {MAX_OWNED_PATHS}，"
+             "疑似 DATA_DIR 指向了错误的位置，已在修改属主前中止")
     for path in paths:
         try:
             # 不跟随符号链接，避免卷内的链接把 chown 引到数据目录之外。

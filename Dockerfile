@@ -29,5 +29,5 @@ VOLUME ["/data"]
 EXPOSE 8765
 
 # 平台把持久卷挂到 /data 时会带来自己的属主，入口脚本负责在必要时修好它再降权。
-ENTRYPOINT ["python", "-u", "entrypoint.py"]
+ENTRYPOINT ["python", "-u", "/app/entrypoint.py"]
 CMD ["python", "-u", "server.py"]

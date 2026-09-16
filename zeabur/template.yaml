@@ -20,7 +20,7 @@ spec:
     - key: ADMIN_TOKEN
       type: PASSWORD
       name: 管理密码
-      description: 12–256 个字符。仅用于首次初始化，之后改这里不会改掉已保存的密码。
+      description: 必填，12–256 个字符。留空服务将无法启动。仅用于首次初始化，之后改这里不会改掉已保存的密码。
     - key: PUBLIC_DOMAIN
       type: DOMAIN
       name: 访问域名
@@ -89,5 +89,5 @@ spec:
             content: ${ZEABUR_WEB_URL}
           - title: 管理后台
             content: ${ZEABUR_WEB_URL}/admin
-          - title: 管理密码
-            content: ${ADMIN_TOKEN}
+          - title: 登录方式
+            content: 使用部署时填写的管理密码登录
