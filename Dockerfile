@@ -22,7 +22,8 @@ RUN useradd --system --uid 10001 monitor \
     && mkdir /data \
     && chown monitor:monitor /data
 
-USER monitor
+# 入口脚本需要 root 权限处理托管平台挂载的持久卷；它会在启动服务前降权到 monitor。
+USER root
 
 VOLUME ["/data"]
 EXPOSE 8765
