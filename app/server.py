@@ -25,6 +25,7 @@ from visual_review import review_pelican
 
 ROOT = Path(__file__).resolve().parent
 INTERVAL = 30 * 60
+LOCK_WAIT = 15
 MAX_RESPONSE = 2 * 1024 * 1024
 # ponytail: buffer SSE up to 16 MB; parse incrementally if concurrent streams strain memory.
 MAX_STREAM_RESPONSE = 16 * 1024 * 1024
@@ -1007,6 +1008,25 @@ class Handler(BaseHTTPRequestHandler):
             self.send({"error": str(exc)}, status=400)
 
 
+def acquire_instance_lock(directory):
+    """取得数据目录的独占锁，调用方需持有返回的文件对象，否则锁会随之释放。
+
+    平台重建容器时旧进程可能仍在退出，锁要过一会儿才交还，因此放弃之前留出一段
+    重试窗口，免得把能自愈的竞争变成部署失败。
+    """
+    instance_lock = (directory / "server.lock").open("a")
+    deadline = time.monotonic() + LOCK_WAIT
+    while True:
+        try:
+            fcntl.flock(instance_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return instance_lock
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                raise SystemExit(f"此数据目录已有检测服务运行（已等待 {LOCK_WAIT} 秒），"
+                                 "不能启动第二个调度进程") from None
+            time.sleep(1)
+
+
 def main():
     os.umask(0o077)
     host, port = os.environ.get("HOST", "127.0.0.1"), int(os.environ.get("PORT", "8765"))
@@ -1014,14 +1034,14 @@ def main():
     directory = Path(os.environ.get("DATA_DIR", str(ROOT / "data")))
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     # ponytail: one process owns scheduling; use a distributed lease before running multiple replicas.
-    instance_lock = (directory / "server.lock").open("a")
-    try:
-        fcntl.flock(instance_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        raise SystemExit("此数据目录已有检测服务运行，不能启动第二个调度进程") from None
+    instance_lock = acquire_instance_lock(directory)
     server = ThreadingHTTPServer((host, port), Handler)
     monitor = Monitor(directory)
     if token and not monitor.password_configured():
+        # 只在初始化时校验；已设过密码的实例继续忽略 ADMIN_TOKEN，改坏了也不至于起不来。
+        if not 12 <= len(token) <= 256:
+            raise SystemExit(f"ADMIN_TOKEN 需要 12–256 个字符，当前为 {len(token)} 个，"
+                             "请修改环境变量后重新部署")
         monitor.setup_password(token)
     if host not in ("127.0.0.1", "localhost") and not monitor.password_configured():
         raise SystemExit("请先在本机设置管理密码，或使用 ADMIN_TOKEN 初始化密码")

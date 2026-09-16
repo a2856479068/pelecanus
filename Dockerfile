@@ -15,7 +15,7 @@ RUN pip install --no-cache-dir -r requirements.txt \
     && python -m playwright install --with-deps chromium \
     && chmod -R a+rX /opt/playwright
 
-COPY app/server.py app/visual_review.py app/render_frames.py ./
+COPY app/server.py app/visual_review.py app/render_frames.py app/entrypoint.py ./
 COPY app/web ./web
 
 RUN useradd --system --uid 10001 monitor \
@@ -27,4 +27,6 @@ USER monitor
 VOLUME ["/data"]
 EXPOSE 8765
 
+# 平台把持久卷挂到 /data 时会带来自己的属主，入口脚本负责在必要时修好它再降权。
+ENTRYPOINT ["python", "-u", "entrypoint.py"]
 CMD ["python", "-u", "server.py"]

@@ -31,13 +31,28 @@
 
 ### Zeabur
 
+仓库提供 [`zeabur/template.yaml`](zeabur/template.yaml)，已定义好服务来源、持久卷、端口、健康检查和环境变量，一条命令即可完成部署：
+
+```sh
+npx zeabur@latest auth login
+npx zeabur@latest template deploy -f zeabur/template.yaml
+```
+
+命令会提示填写 `ADMIN_TOKEN`（管理密码，12–256 字符）和 `PUBLIC_DOMAIN`（访问域名）。部署完成后打开 `https://<你的域名>/admin` 登录，再按[配置节点](#配置节点)完成设置。Zeabur 在入口处终止 TLS，不需要另外架反向代理。
+
+想让别人也能一键部署，可执行 `npx zeabur@latest template create -f zeabur/template.yaml` 发布模板，再到 [Zeabur Dashboard](https://dash.zeabur.com/account) 的 Template 页签复制部署按钮代码。按钮只能由模板作者生成。
+
+也可以手动导入：
+
 1. 在 Zeabur 新建项目，选择从 GitHub 导入本仓库。
 2. 选择自动检测到的 Dockerfile 服务；HTTP 端口设为 `8765`（若界面自动识别则保持默认）。
 3. 在 Variables 添加 `ADMIN_TOKEN`，填入首次后台初始化用的管理密码。
 4. 添加 Persistent Volume，挂载路径填写 `/data`，并将服务副本数保持为 `1`。
 5. 部署完成后，打开平台分配的域名并访问 `/admin` 配置 API 节点。
 
-`ADMIN_TOKEN` 只会在数据卷尚未初始化时生效；修改它不会重置既有后台密码。
+`ADMIN_TOKEN` 只会在数据卷尚未初始化时生效；修改它不会重置既有后台密码。Zeabur 上也无法通过页面重设密码（该通道仅对本机回环地址开放），忘记密码只能删除数据卷重来，历史记录会一并丢失。
+
+挂载持久卷后 Zeabur 采用 Recreate 策略，重新部署时先停旧实例再起新实例，期间会有短暂停机。`compose.yaml` 里的 `mem_limit`、`cpus`、`pids_limit` 和日志轮转在模板格式中没有对应字段，需要在控制台的服务设置里单独调整；建议把内存放到 1 GB 以上，视觉审核会拉起 Chromium 截图，内存过低会导致渲染进程被杀。
 
 ### 其他 Docker 平台
 

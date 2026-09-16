@@ -11,6 +11,7 @@
 !/app/server.py
 !/app/visual_review.py
 !/app/render_frames.py
+!/app/entrypoint.py
 !/app/Dockerfile
 !/app/.dockerignore
 !/app/requirements.txt
@@ -23,6 +24,9 @@
 !/app/web/privacy.js
 !/app/web/style.css
 !/app/web/favicon.svg
+!/zeabur/
+/zeabur/*
+!/zeabur/template.yaml
 
 # Runtime data, credentials, backups, and local tools are always private.
 **/data/
