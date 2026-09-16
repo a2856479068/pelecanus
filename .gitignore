@@ -4,6 +4,8 @@
 !/README.md
 !/LICENSE
 !/compose.yaml
+!/Dockerfile
+!/.dockerignore
 !/app/
 /app/*
 !/app/server.py

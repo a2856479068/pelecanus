@@ -10,16 +10,68 @@
 - **访客测试**：使用自己的接口提交单项或双项检测，支持排队与进度查询。
 - **后台管理**：密码登录、会话过期和 API 凭据脱敏展示。
 
+## 托管平台一键部署
+
+仓库根目录提供标准 `Dockerfile`，通常可被 Zeabur 以及其他支持 Dockerfile
+的托管平台直接识别和构建。将 GitHub 仓库导入平台后，无需设置构建命令或启动命令。
+
+部署服务时请使用以下配置：
+
+| 配置项 | 值 |
+| --- | --- |
+| 构建入口 | 仓库根目录 `Dockerfile` |
+| 容器 HTTP 端口 | `8765` |
+| 持久化目录 | `/data` |
+| 环境变量 | `ADMIN_TOKEN`（仅首次初始化时必填，12–256 字符） |
+| 实例数 | `1` |
+
+平台若自动注入 `PORT`，应用会优先使用该值并监听 `0.0.0.0`。必须为
+`/data` 添加私有持久化卷；其中包含 SQLite 数据库和 API Key。不要启用多副本，
+因为同一数据库目录只支持一个服务进程。
+
+### Zeabur
+
+1. 在 Zeabur 新建项目，选择从 GitHub 导入本仓库。
+2. 选择自动检测到的 Dockerfile 服务；HTTP 端口设为 `8765`（若界面自动识别则保持默认）。
+3. 在 Variables 添加 `ADMIN_TOKEN`，填入首次后台初始化用的管理密码。
+4. 添加 Persistent Volume，挂载路径填写 `/data`，并将服务副本数保持为 `1`。
+5. 部署完成后，打开平台分配的域名并访问 `/admin` 配置 API 节点。
+
+`ADMIN_TOKEN` 只会在数据卷尚未初始化时生效；修改它不会重置既有后台密码。
+
+### 其他 Docker 平台
+
+Railway、Render、Fly.io、Coolify、Northflank 等 Dockerfile 平台可直接连接本仓库，
+并按上表设置端口、环境变量和持久化卷。若平台只支持部署既有镜像，可先构建并推送：
+
+```sh
+docker build -t your-registry/manxue-ai:latest .
+docker push your-registry/manxue-ai:latest
+```
+
+运行镜像时暴露服务端口并挂载 `/data`：
+
+```sh
+docker run -d \
+  --name manxue-ai \
+  --restart unless-stopped \
+  -p 8765:8765 \
+  -e ADMIN_TOKEN='替换为首次初始化管理密码' \
+  -v manxue-ai-data:/data \
+  your-registry/manxue-ai:latest
+```
+
 ## Docker 部署
 
-需要 Docker Engine / Docker Desktop 和 Docker Compose。Windows 用户请使用 Linux 容器。
+需要 Docker Engine / Docker Desktop 和 Docker Compose。以下 Compose 配置仅供本机使用，
+其端口会绑定到 `127.0.0.1`；托管平台请使用上方的根目录 `Dockerfile`。Windows 用户请使用 Linux 容器。
 
 ```sh
 git clone https://github.com/w1196396546/manxue-ai.git
 cd manxue-ai
 ```
 
-首次启动时，按提示输入 12–256 字符的管理密码。
+首次启动前必须通过 `ADMIN_TOKEN` 设置 12–256 字符的管理密码；未设置时服务不会完成初始化。
 
 Linux / macOS（Bash）：
 

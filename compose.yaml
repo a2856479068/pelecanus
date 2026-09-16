@@ -1,6 +1,8 @@
 services:
   manxue-ai:
-    build: ./app
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: manxue-ai:local
     container_name: manxue-ai
     restart: unless-stopped
