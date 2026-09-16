@@ -966,8 +966,15 @@ class Monitor:
         completed = [r for r in current if r["candy_status"] != "running"]
         settings = self.settings(public=True)
         public = {key: settings[key] for key in ("base_url", "model", "effort", "enabled", "next_run", "interval_minutes", "guest_enabled", "node_name", "active_node_id")}
+        with self.lock:
+            queued_ids = list(self.scheduled_queue)
+        with self.db() as db:
+            queued_nodes = [f"节点 {index}" for index, row in enumerate(db.execute(
+                f"SELECT name FROM nodes WHERE id IN ({','.join('?' for _ in queued_ids)}) ORDER BY id", queued_ids
+            ).fetchall(), 1)] if queued_ids else []
         return dict(settings=public, server_time=now,
-                    running=running[0] if running else None, candy_running=any(r["candy_status"]=="running" for r in current), timeline=results,
+                    running=running[0] if running else None, queued_nodes=queued_nodes,
+                    candy_running=any(r["candy_status"]=="running" for r in current), timeline=results,
                     stats=dict(total=len(current), legacy=len(results)-len(current), passed=sum(r["candy_status"] == "passed" for r in completed),
                                completed=len(completed), errors=sum(r["candy_status"] == "error" for r in completed),
                                invalid=sum(r["candy_status"] == "invalid" for r in completed)))
@@ -1025,6 +1032,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send(monitor.settings(public=True))
                 if url.path == "/api/admin/nodes":
                     return self.send(monitor.nodes())
+                if url.path == "/api/admin/runs":
+                    return self.send(monitor.runs())
             if url.path == "/api/state":
                 return self.send(monitor.state())
             if url.path == "/api/runs":

@@ -68,6 +68,10 @@ function renderState() {
   $('last-run').textContent = latest ? date(latest.started) : '尚无记录';
   $('next-run').textContent = config.enabled ? date(config.next_run) : '尚未启用';
   $('schedule-note').textContent = config.enabled ? `每 ${config.interval_minutes} 分钟 · 后台自动运行` : '站点自动检测已暂停';
+  const queued = state.queued_nodes || [];
+  const queueStatus = $('queue-status');
+  queueStatus.hidden = !queued.length;
+  queueStatus.textContent = queued.length ? `排队中的节点（${queued.length}）：${queued.map(name => escapeHTML(name)).join('、')} · 将按顺序检测` : '';
   $('frequency').textContent = `${config.interval_minutes} 分钟 / 糖果题计入时间线`;
   $('footer-frequency').textContent = `每 15 秒同步记录 · 后台每 ${config.interval_minutes} 分钟检测`;
   $('run').disabled = guestBusy || !config.guest_enabled;

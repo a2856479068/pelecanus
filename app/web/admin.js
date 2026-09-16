@@ -1,7 +1,9 @@
 const $ = id => document.getElementById(id);
 let token = '', busy = false, config, setup = false, nodes = [], editingNode = null, nodeSignature = '';
 let nodeSearch = '', nodeStatus = 'all';
+let runHistory = [], batchRunIds = new Set();
 const selectedNodes = new Set();
+const labels = {passed:'双项通过', error:'请求失败', invalid:'校验未通过', running:'检测中', queued:'排队中', legacy:'历史单项'};
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 privacy.bind(document);
 async function api(path, body) {
@@ -47,7 +49,6 @@ function renderNodes() {
   if (signature === nodeSignature) return;
   nodeSignature = signature;
   const running = nodes.some(n => n.last_run?.status === 'running');
-  const labels = {passed:'双项通过',error:'请求失败',invalid:'校验未通过',running:'检测中'};
   $('node-list').innerHTML = filtered.length ? filtered.map(n => `<article class="node-row ${n.active ? 'active-node' : ''}"><label class="node-select"><input type="checkbox" data-select="${n.id}" ${selectedNodes.has(n.id) ? 'checked' : ''} ${busy || !n.enabled || !n.has_key ? 'disabled' : ''}> 选择</label><div class="node-info"><h3>${escapeHTML(n.name)} ${n.active ? '<span class="badge passed">当前节点</span>' : ''} ${!n.enabled ? '<span class="badge neutral">已停用</span>' : ''}</h3><p>${escapeHTML(n.base_url)} · ${escapeHTML(n.model)} · ${escapeHTML(n.effort)} · ${n.protocol === 'responses' ? 'Responses' : 'Chat Completions'}</p><p>密钥 ${escapeHTML(n.api_key_masked)}</p></div><div class="node-actions"><button class="button secondary" type="button" data-edit="${n.id}" ${busy ? 'disabled' : ''}>编辑</button><button class="button secondary" type="button" data-copy="${n.id}" ${busy ? 'disabled' : ''}>复制</button><button class="button secondary" type="button" data-toggle="${n.id}" ${busy || (n.active && n.enabled) ? 'disabled' : ''}>${n.enabled ? '停用' : '启用'}</button><button class="button secondary" type="button" data-activate="${n.id}" ${busy || n.active || !n.enabled || !n.has_key ? 'disabled' : ''}>${n.active ? '使用中' : '设为当前'}</button><button class="button primary" type="button" data-test="${n.id}" ${busy || running || !n.enabled || !n.has_key ? 'disabled' : ''}>测试一次</button></div><div class="node-result">${n.last_run ? `<span class="badge ${escapeHTML(n.last_run.status)}">${labels[n.last_run.status] || '尚未检测'}</span><span>最近一轮 #${n.last_run.id} · ${new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(n.last_run.started*1000))}</span><a href="/?run=${n.last_run.id}" target="_blank" rel="noopener">查看结果 ↗</a>${n.last_run.error ? `<p>${escapeHTML(n.last_run.error)}</p>` : ''}` : '<span>尚未检测</span>'}</div></article>`).join('') : '<p class="filter-empty">没有符合当前筛选条件的节点。</p>';
   $('selected-node-count').textContent = `已选 ${selectedNodes.size} 个`;
   $('bulk-run').disabled = busy || !selectedNodes.size;
@@ -59,6 +60,16 @@ function renderNodes() {
   $('select-all-nodes').indeterminate = selectedVisible > 0 && selectedVisible < selectable.length;
 }
 async function refreshNodes() { nodes = await api('/api/admin/nodes'); renderNodes(); }
+const dateTime = value => value ? new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(value*1000)) : '—';
+function renderRunMonitor() {
+  const tracked = runHistory.filter(run => batchRunIds.has(run.id));
+  const finished = tracked.filter(run => run.status !== 'running');
+  const running = runHistory.filter(run => run.status === 'running');
+  const summary = tracked.length ? `${finished.length}/${tracked.length} 已完成` : (running.length ? `${running.length} 个节点检测中` : '暂无检测任务');
+  $('admin-run-progress').innerHTML = `<strong>${escapeHTML(summary)}</strong>${tracked.length ? `<progress max="${tracked.length}" value="${finished.length}" aria-label="批量检测进度"></progress>` : ''}${running.length ? `<span class="run-current">当前：${running.map(run => escapeHTML(run.node_name || `第 ${run.id} 轮`)).join('、')}</span>` : ''}`;
+  $('admin-run-history').innerHTML = runHistory.length ? `<h3>最近检测记录</h3>${runHistory.slice(0,12).map(run => `<div class="admin-history-row"><span class="badge ${escapeHTML(run.status)}">${escapeHTML(labels[run.status] || run.status)}</span><span>#${run.id} · ${escapeHTML(run.node_name || '历史节点')} · ${dateTime(run.started)}</span><a href="/?run=${run.id}" target="_blank" rel="noopener">查看 ↗</a></div>`).join('')}` : '<p class="field-note">暂无检测历史。</p>';
+}
+async function refreshRuns() { runHistory = await api('/api/admin/runs'); renderRunMonitor(); }
 function editNode(id = null) {
   const node = nodes.find(n => n.id === id);
   editingNode = id;
@@ -165,6 +176,7 @@ $('auth-form').addEventListener('submit', async event => {
     token = session.token;
     showConfig(await api('/api/admin/settings'));
     await refreshNodes();
+    await refreshRuns();
     $('auth-dialog').close(); $('admin-token').value = ''; $('confirm-password').value = ''; $('auth-error').textContent = '';
   } catch (error) { token = ''; $('auth-error').textContent = error.message; }
   finally { $('auth-submit').disabled = false; }
@@ -190,14 +202,15 @@ $('bulk-run').addEventListener('click', () => action(async () => {
   let failed = 0;
   const deadline = Date.now() + 30 * 60 * 1000;
   for (const id of ids) {
-    try { await api(`/api/admin/nodes/${id}/run`, {}); started++; }
+    try { const result = await api(`/api/admin/nodes/${id}/run`, {}); batchRunIds.add(result.id); started++; await refreshRuns(); }
     catch (error) { failed++; if (started === 0) throw error; }
     while ((await api('/api/admin/nodes')).some(node => node.last_run?.status === 'running')) {
       if (Date.now() > deadline) throw new Error('批量检测等待超时，请刷新页面查看已完成结果');
       await new Promise(resolve => setTimeout(resolve, 2000));
+      await refreshRuns();
     }
   }
-  selectedNodes.clear(); $('select-all-nodes').checked = false; await refreshNodes(); message(`已提交 ${started} 个节点的检测${failed ? `，${failed} 个节点提交失败` : ''}；服务会按单实例锁顺序执行。`, failed > 0);
+  selectedNodes.clear(); $('select-all-nodes').checked = false; await refreshRuns(); await refreshNodes(); message(`已提交 ${started} 个节点的检测${failed ? `，${failed} 个节点提交失败` : ''}；服务会按单实例锁顺序执行。`, failed > 0);
 }));
 load();
-setInterval(() => { if (token && !busy && !$('node-dialog').open) refreshNodes().catch(error => message(error.message,true)); }, 5000);
+setInterval(() => { if (token && !busy && !$('node-dialog').open) Promise.all([refreshNodes(), refreshRuns()]).catch(error => message(error.message,true)); }, 5000);
