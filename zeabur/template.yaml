@@ -4,7 +4,7 @@ metadata:
   name: Manxue AI
 spec:
   description: 自托管的模型接口观察站，通过 SVG 动画生成和逻辑题检测记录模型表现
-  icon: https://raw.githubusercontent.com/fishxcode/manxue-ai/main/app/web/favicon.svg
+  icon: https://raw.githubusercontent.com/fishxcode/pelecanus/main/app/web/favicon.svg
   tags:
     - AI
     - Monitoring
@@ -54,13 +54,13 @@ spec:
     判断，可能误判。这些检测不证明模型身份，也不代表模型的整体能力。
   services:
     - name: manxue-ai
-      icon: https://raw.githubusercontent.com/fishxcode/manxue-ai/main/app/web/favicon.svg
+      icon: https://raw.githubusercontent.com/fishxcode/pelecanus/main/app/web/favicon.svg
       template: GIT
       domainKey: PUBLIC_DOMAIN
       spec:
         source:
           source: ARBITRARY_GIT
-          gitURL: https://github.com/fishxcode/manxue-ai.git
+          gitURL: https://github.com/fishxcode/pelecanus.git
           branch: main
         ports:
           # 与根目录 Dockerfile 的 EXPOSE 和下面的 PORT 保持一致，三者不一致会导致健康检查不通过。
