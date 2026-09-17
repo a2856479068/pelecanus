@@ -175,10 +175,6 @@ Linux 如缺少浏览器系统依赖，可执行 `python -m playwright install -
 
 - [Linux DO](https://linux.do/)
 
-## 不降智网站推荐
-
-- [fullcupai](https://api.fullcupai.com/)
-
 ## 许可证
 
 [Apache License 2.0](LICENSE)
