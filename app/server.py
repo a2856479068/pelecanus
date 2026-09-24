@@ -743,6 +743,10 @@ class Monitor:
             if "account_label" not in columns:
                 db.execute("ALTER TABLE runs ADD COLUMN account_label TEXT NOT NULL DEFAULT ''")
             db.execute("CREATE INDEX IF NOT EXISTS runs_account ON runs(account_fingerprint,id)")
+            # Old fingerprints came from a shared workspace, not an individual.
+            # Relabel the ambiguity without guessing ownership or changing IDs.
+            db.execute("UPDATE runs SET account_label='旧工作区 ' || substr(account_fingerprint,6) || '（未区分个人账号）' "
+                       "WHERE protocol='codex' AND account_fingerprint!='' AND account_label='账号 ' || substr(account_fingerprint,6)")
             # An outcome is tiny and survives deletion of the artwork and run.
             # Exact timestamps keep the rolling 24-hour denominator accurate.
             db.executescript("""
@@ -1126,6 +1130,7 @@ class Monitor:
                                            or (node_id is not None and node_id not in self.scheduled_queue)):
                 return None
             account_fingerprint = ""
+            account_label = ""
             if config["protocol"] == "codex":
                 status = login_status()
                 if not status["logged_in"]:
@@ -1134,6 +1139,7 @@ class Monitor:
                 candidate = status.get("account_fingerprint", "")
                 if re.fullmatch(r"acct-[0-9a-f]{12}", candidate):
                     account_fingerprint = candidate
+                    account_label = status.get('account_label') or f'个人账号 {candidate[5:]}'
             if self.run_cancellations or db.execute("SELECT 1 FROM runs WHERE status='running'").fetchone():
                 if source == "scheduled":
                     return None
@@ -1143,7 +1149,7 @@ class Monitor:
                 VALUES (?,'running',?,?,?,?,?,?,?, ?,3,'{}',?,?,?,?,?,?)""",
                 (now, source, config["model"], config["base_url"], config["effort"], config["protocol"],
                  "", "", prompt, config["active_node_id"], config["node_name"], config.get("group_id"), config.get("group_name", ""),
-                 account_fingerprint, f"账号 {account_fingerprint[5:]}" if account_fingerprint else ""))
+                 account_fingerprint, account_label))
             run_id = row.lastrowid
             if source == "manual":
                 self.scheduled_queue.clear()

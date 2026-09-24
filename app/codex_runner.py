@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import tomllib
 
 from local_runtime import process_options, stop_process
 
@@ -69,14 +70,16 @@ def _auth_path():
     return (Path(home).expanduser() if home else Path.home() / ".codex") / "auth.json"
 
 
-def _account_id():
-    """Read only the stable account id; never expose token contents."""
+def auth_options():
+    """Preserve the credential store when exec ignores unrelated user config."""
     try:
-        data = json.loads(_auth_path().read_text(encoding="utf-8"))
-        account_id = data.get("tokens", {}).get("account_id")
-        return account_id.strip() if isinstance(account_id, str) and account_id.strip() else ""
+        config = tomllib.loads(_auth_path().with_name('config.toml').read_text(encoding='utf-8'))
+        storage = config.get('cli_auth_credentials_store')
+        if storage in ('file', 'keyring', 'auto', 'ephemeral'):
+            return ['-c', 'cli_auth_credentials_store=' + json.dumps(storage)]
     except (OSError, ValueError, TypeError, UnicodeDecodeError):
-        return ""
+        pass
+    return []
 
 
 def _account_fingerprint(account_id=""):
@@ -85,18 +88,85 @@ def _account_fingerprint(account_id=""):
     return "acct-" + hashlib.sha256(account_id.encode("utf-8")).hexdigest()[:12]
 
 
+@contextlib.contextmanager
+def account_client(command=None):
+    """A fresh CLI process resolves file/keyring credentials; no auth caching."""
+    incoming = queue.Queue()
+    with tempfile.TemporaryDirectory(prefix='pelican-account-') as folder:
+        process = subprocess.Popen((command or codex_command()) + ['app-server', '-c', 'model_provider="openai"'] + auth_options(),
+                                   cwd=folder, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=subprocess.DEVNULL, env=cli_environment(), **process_options())
+        def read_messages():
+            try:
+                for line in process.stdout:
+                    try:
+                        incoming.put(json.loads(line))
+                    except (ValueError, UnicodeDecodeError):
+                        continue
+            finally:
+                incoming.put(None)
+        reader = threading.Thread(target=read_messages, daemon=True)
+        reader.start()
+        identifier = 0
+        def call(method, params):
+            nonlocal identifier
+            identifier += 1
+            process.stdin.write((json.dumps(dict(id=identifier, method=method, params=params)) + '\n').encode())
+            process.stdin.flush()
+            deadline = time.monotonic() + 15
+            while True:
+                item = incoming.get(timeout=max(.01, deadline - time.monotonic()))
+                if item is None:
+                    raise ValueError('Codex 账号连接已关闭')
+                if item.get('id') == identifier:
+                    if 'error' in item:
+                        raise ValueError('Codex 未能读取账号信息，请检查 CLI 登录')
+                    return item.get('result', {})
+                if time.monotonic() >= deadline:
+                    raise queue.Empty
+        try:
+            call('initialize', {'clientInfo': {'name':'pelican_local', 'version':'1.0.0'}})
+            process.stdin.write(b'{"method":"initialized","params":{}}\n')
+            process.stdin.flush()
+            yield call
+        finally:
+            stop_process(process)
+            reader.join(timeout=1)
+            process.stdin.close()
+            process.stdout.close()
+
+
+def account_status(account):
+    base = dict(installed=True, logged_in=False, mode='unknown', checked_at=time.time(),
+                account_fingerprint='', account_label='', account_email_masked='', identity_version=2)
+    if not isinstance(account, dict) or account.get('type') != 'chatgpt':
+        return dict(base, message='请在 Codex 中登录 ChatGPT 账号，完成后刷新账号')
+    email = account.get('email')
+    if not isinstance(email, str) or '@' not in email or not email.strip():
+        return dict(base, mode='chatgpt', message='Codex 已登录，但无法确认个人账号身份；请重新登录后刷新')
+    email = email.strip().casefold()
+    # tokens.account_id identifies a workspace shared by multiple people.
+    # Use the CLI-resolved personal identity, never a workspace or a token.
+    fingerprint = _account_fingerprint('chatgpt-person-v2:' + email)
+    local, domain = email.rsplit('@', 1)
+    masked = local[:min(2, max(1, len(local)-1))] + '***@' + domain
+    return dict(base, logged_in=True, mode='chatgpt', message='已读取 Codex 当前个人账号',
+                account_fingerprint=fingerprint, account_email_masked=masked,
+                account_label=f'{masked} · {fingerprint[5:]}', plan_type=account.get('planType'))
+
+
 def login_status():
     try:
-        result = subprocess.run(codex_command() + ["login", "status"], capture_output=True,
-                                timeout=15, env=cli_environment(), **process_options())
-        message = (result.stdout + result.stderr).decode("utf-8", errors="replace").lower()
-        if result.returncode == 0 and "chatgpt" in message:
-            fingerprint = _account_fingerprint(_account_id())
-            return {"installed": True, "logged_in": True, "mode": "chatgpt", "message": "已通过 ChatGPT 账号登录",
-                    "account_fingerprint": fingerprint, "account_label": f"账号指纹 {fingerprint[5:]}" if fingerprint else "账号身份不可读取"}
-        return {"installed": True, "logged_in": False, "mode": "other", "message": "请在终端执行 codex login，选择 ChatGPT 账号登录"}
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        return {"installed": False, "logged_in": False, "mode": "unknown", "message": "无法读取 Codex 登录状态，请检查 CLI 安装"}
+        command = codex_command()
+    except (OSError, ValueError):
+        return dict(installed=False, logged_in=False, mode='unknown', message='未找到 Codex CLI，请检查安装',
+                    account_fingerprint='', account_label='', checked_at=time.time())
+    try:
+        with account_client(command) as call:
+            return account_status(call('account/read', {'refreshToken':False}).get('account'))
+    except (OSError, ValueError, queue.Empty, subprocess.TimeoutExpired):
+        return dict(installed=True, logged_in=False, mode='unknown', message='无法确认 Codex 当前账号，请检查登录后刷新；未沿用旧账号',
+                    account_fingerprint='', account_label='', checked_at=time.time())
 
 
 def verify_account(config):
@@ -105,7 +175,7 @@ def verify_account(config):
         raise ValueError("请先在本机执行 codex login 并使用 ChatGPT 账号登录")
     expected = config.get("_codex_account_fingerprint", "")
     current = status.get("account_fingerprint", "")
-    if expected and current and expected != current:
+    if expected and expected != current:
         raise ValueError("Codex 登录账号已切换，本轮已停止；请重新开始以保持上下文一致")
     return status
 
@@ -115,7 +185,7 @@ def available_models(account_fingerprint=None, force_refresh=False):
     global _catalog, _catalog_at, _catalog_account, _catalog_command
     with _catalog_lock:
         command = codex_command()
-        account_fingerprint = account_fingerprint if account_fingerprint is not None else _account_fingerprint(_account_id())
+        account_fingerprint = account_fingerprint if account_fingerprint is not None else login_status().get('account_fingerprint', '')
         if (not force_refresh and _catalog is not None and _catalog_account == account_fingerprint
                 and _catalog_command == command
                 and time.monotonic() - _catalog_at < 300):
@@ -123,7 +193,7 @@ def available_models(account_fingerprint=None, force_refresh=False):
         incoming = queue.Queue()
         with tempfile.TemporaryDirectory(prefix="pelican-models-") as folder:
             try:
-                process = subprocess.Popen(command + ["app-server", "-c", 'model_provider="openai"'],
+                process = subprocess.Popen(command + ["app-server", "-c", 'model_provider="openai"'] + auth_options(),
                                            cwd=folder, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                            stderr=subprocess.DEVNULL, env=cli_environment(), **process_options())
             except OSError as exc:
@@ -155,7 +225,11 @@ def available_models(account_fingerprint=None, force_refresh=False):
                 send({"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "pelican_local", "version": "1.0.0"}}})
                 receive(1)
                 send({"method": "initialized", "params": {}})
-                models, cursor, identifier = [], None, 2
+                send({"id": 2, "method": "account/read", "params": {"refreshToken":False}})
+                actual = account_status(receive(2).get('account'))
+                if not actual['logged_in'] or actual['account_fingerprint'] != account_fingerprint:
+                    raise ValueError('读取模型期间 Codex 账号已切换，请刷新账号与模型')
+                models, cursor, identifier = [], None, 3
                 while True:
                     send({"id": identifier, "method": "model/list", "params": {"limit": 100, "includeHidden": False, "cursor": cursor}})
                     result = receive(identifier)
@@ -246,7 +320,8 @@ def call_codex(config, prompt):
                     "-c", 'model_provider="openai"', "-c", 'approval_policy="never"',
                     "-c", "model_reasoning_effort=" + json.dumps(config["effort"]),
                     "-c", "project_doc_max_bytes=0", "-c", "features.shell_tool=false",
-                    "-c", "features.multi_agent=false", "-c", 'web_search="disabled"'] + image_args + ["-"]
+                    "-c", "features.multi_agent=false", "-c", 'web_search="disabled"'] + auth_options() + image_args + ["-"]
+        verify_account(config)
         with (root / "events.jsonl").open("w+b") as events, (root / "stderr.txt").open("w+b") as errors:
             process = subprocess.Popen(command, cwd=root, stdin=subprocess.PIPE, stdout=events, stderr=errors,
                                        env=cli_environment(), **process_options())

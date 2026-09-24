@@ -35,20 +35,20 @@ async function refreshCodex(forceRefresh = false) {
   const loginHint = $('codex-login-hint');
   const previousModels = codexModels;
   const previousKey = modelCatalogKey(previousModels, codexCombinations);
-  $('codex-status').textContent = forceRefresh ? '正在强制刷新模型目录与组合定义…' : '正在读取登录状态与模型列表…';
+  if (forceRefresh || !codexFingerprint) $('codex-status').textContent = forceRefresh ? '正在刷新当前账号与模型…' : '正在读取登录状态与模型列表…';
   try {
     const result = await api(`/api/admin/codex${forceRefresh ? `?refresh=1&_=${Date.now()}` : ''}`);
     const fetchedModels = Array.isArray(result.models) ? result.models.filter(model => model && typeof model.model === 'string' && model.model) : [];
     const fetchedCombinations = normalizeCombinations(result.combinations, fetchedModels);
-    const keepPrevious = Boolean(result.model_error && !fetchedModels.length && previousModels.length);
-    codexModels = keepPrevious ? previousModels : fetchedModels;
-    codexCombinations = keepPrevious ? codexCombinations : fetchedCombinations;
-    const catalogChanged = !keepPrevious && previousKey !== modelCatalogKey(codexModels, codexCombinations);
+    codexModels = fetchedModels;
+    codexCombinations = fetchedCombinations;
+    const catalogChanged = previousKey !== modelCatalogKey(codexModels, codexCombinations);
     const switched = codexFingerprint && result.account_fingerprint && codexFingerprint !== result.account_fingerprint;
     codexFingerprint = result.account_fingerprint || '';
     const identity = result.account_label ? ` · ${result.account_label}` : '';
-    const change = forceRefresh ? (catalogChanged ? ` · 组合定义已更新（${previousModels.length} → ${codexModels.length} 个模型，${codexCombinations.length} 个有效组合）` : keepPrevious ? ' · 刷新失败，保留上次组合定义' : ' · 模型与组合定义没有变化') : '';
-    $('codex-status').textContent = (switched ? '检测到 ChatGPT 登录账号已切换，模型列表已刷新' : (forceRefresh ? '模型目录已刷新' : result.message)) + identity + (result.model_error ? ' · ' + result.model_error : ` · ${codexModels.length} 个可用模型，${codexCombinations.length} 个有效组合`) + change;
+    const change = forceRefresh && !result.model_error ? (catalogChanged ? ` · 组合定义已更新（${previousModels.length} → ${codexModels.length} 个模型，${codexCombinations.length} 个有效组合）` : ' · 模型与组合定义没有变化') : '';
+    const checked = result.checked_at ? ` · ${new Date(result.checked_at * 1000).toLocaleTimeString('zh-CN', {hour12:false})} 已核对` : '';
+    $('codex-status').textContent = (switched ? '检测到个人账号已切换' : result.message) + identity + (result.model_error ? ' · ' + result.model_error : ` · ${codexModels.length} 个可用模型，${codexCombinations.length} 个有效组合`) + change + checked;
     loginHint.textContent = result.logged_in ? '' : result.installed
       ? '未检测到 ChatGPT 账号登录。请在本机终端运行 codex login，选择 ChatGPT 账号；完成后点击“刷新账号与模型”。'
       : '未找到可用的 Codex CLI。请先安装 Codex CLI，在本机终端运行 codex login 并选择 ChatGPT 账号；完成后点击“刷新账号与模型”。';
@@ -57,11 +57,14 @@ async function refreshCodex(forceRefresh = false) {
     renderPrimaryModelSettings($('primary-model').value || config?.model);
     if (!groupBusy && (forceRefresh || catalogChanged || switched)) refreshGroupPairOptions();
     renderGroups();
+    renderRunMonitor();
     if ($('node-dialog').open) updateProvider();
   } catch (error) {
+    codexFingerprint = ''; codexModels = []; codexCombinations = [];
     $('codex-status').textContent = error.message;
     loginHint.textContent = '读取本机 Codex 登录状态失败，请检查服务连接后点击“刷新账号与模型”。';
     loginHint.hidden = false;
+    renderPrimaryModelSettings(); renderGroups(); renderRunMonitor();
   }
   finally { codexRefreshing = false; $('refresh-codex').disabled = false; }
 }
@@ -733,7 +736,7 @@ $('bulk-run').addEventListener('click', () => action(async () => {
 liveAuthLoading = true;
 load().finally(() => { liveAuthLoading = false; });
 setInterval(() => { if (authenticated && !busy && !$('node-dialog').open) Promise.all([refreshNodes(), refreshRuns(), ...(groupBusy ? [] : [refreshGroups()])]).catch(error => message(error.message,true)); }, 5000);
-setInterval(() => { if (authenticated && !busy && !$('node-dialog').open) refreshCodex(); }, 30000);
+setInterval(() => { if (authenticated) refreshCodex(); }, 5000);
 
 window.addEventListener('focus', async () => {
   if (busy || groupBusy) return;

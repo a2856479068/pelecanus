@@ -7,7 +7,7 @@
   <main class="admin-main" id="main-content">
     <header class="page-head"><div><div class="eyebrow">PELICAN STUDIO <span>/ ADMIN</span></div><h1>鹈鹕动画<span class="accent">定时生成</span></h1><p>选模型、设间隔；结果可在公开画廊查看或在作品管理中删除。</p></div><span class="badge neutral" id="admin-status">连接管理服务中</span></header>
     <div id="admin-content" hidden>
-      <section class="panel settings-panel codex-account"><div><div class="eyebrow">CHATGPT LOGIN</div><h2>Codex 账号</h2><p id="codex-status" role="status">正在读取本机登录状态…</p><p id="codex-login-hint" role="alert" hidden></p></div><button class="button secondary" id="refresh-codex" type="button">刷新账号与模型</button></section>
+      <section class="panel settings-panel codex-account"><div><div class="eyebrow">CHATGPT LOGIN</div><h2>Codex 当前个人账号</h2><p id="codex-status" role="status">正在读取本机登录状态…</p><p class="field-note">每 5 秒核对一次；切换后显示新账号的脱敏邮箱。生成记录保留请求开始时的个人账号。</p><p id="codex-login-hint" role="alert" hidden></p></div><button class="button secondary" id="refresh-codex" type="button">刷新账号与模型</button></section>
       <form id="admin-form" autocomplete="off" class="admin-layout system-form">
         <section class="panel settings-panel admin-settings quick-settings" aria-labelledby="quick-title">
           <div class="section-heading"><span class="number" aria-hidden="true">✦</span><div><h2 id="quick-title">生成设置</h2><p>选择单个模型，或逐组运行已保存的模型组合。</p></div></div>
@@ -53,7 +53,7 @@
 
       <section id="run-records" class="panel records-panel" aria-labelledby="run-monitor-title">
         <div class="records-heading"><div><div class="eyebrow">GENERATION HISTORY</div><h2 id="run-monitor-title">生成记录</h2><p>按账号、模型和循环组查找作品，查看请求结果并批量管理。</p></div><button id="history-refresh" class="button secondary" type="button">刷新记录</button></div>
-        <p class="record-account-note">新记录标记请求开始时的 Codex 账号指纹。旧记录显示“账号未记录”；API 节点不对应 ChatGPT 账号。删除作品后仍保留最少的时间与结果用于统计，成功率按请求成功 ÷（成功＋失败）计算；手动取消不计入。迁移前已删除且没有备份的请求无法追溯。</p>
+        <p class="record-account-note">新记录标记请求开始时的个人账号和脱敏邮箱。旧版工作区标记无法区分具体用户，不自动归给当前账号；更早记录显示“账号未记录”。API 节点不对应 ChatGPT 账号。删除作品后仍保留最少的时间与结果用于统计，成功率按请求成功 ÷（成功＋失败）计算；手动取消不计入。迁移前已删除且没有备份的请求无法追溯。</p>
         <div class="records-stats-heading">最近 24 小时 · 站点已追踪请求（含已删除作品）</div><div id="admin-stats" class="admin-stats" aria-label="最近 24 小时统计"></div>
         <div id="admin-run-progress" class="admin-run-progress" role="status" aria-live="polite">暂无测试任务。</div>
         <div class="history-filters">
