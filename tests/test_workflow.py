@@ -12,7 +12,8 @@ from unittest.mock import patch
 from urllib import error, request
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
-from server import Handler, Monitor, PROMPT, SESSION_TTL, ThreadingHTTPServer
+from server import Handler, Monitor, PROMPT, SESSION_TTL, ThreadingHTTPServer, downloadable_svg
+from codex_runner import call_codex
 
 SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800"><rect width="1200" height="800" fill="skyblue"/></svg>'
 HTML = '<!doctype html><html><body>' + SVG + '</body></html>'
@@ -42,6 +43,95 @@ class WorkflowTests(unittest.TestCase):
         while self.monitor.run_cancellations and time.monotonic() < deadline:
             time.sleep(.01)
         self.assertFalse(self.monitor.run_cancellations)
+
+    def test_favorites_survive_restart_and_block_every_delete_path(self):
+        favorite, ordinary = self.seed(2)
+        self.monitor.set_favorite(favorite, True)
+        self.monitor.set_favorite(favorite, True)  # Retrying a request is idempotent.
+        restarted = Monitor(self.folder.name)
+        self.assertEqual(restarted.gallery(favorite='yes')['items'][0]['id'], favorite)
+        self.assertIs(restarted.history(favorite='yes')['items'][0]['favorite'], True)
+        self.assertEqual(restarted.gallery(selection_only=True)['ids'], [ordinary])
+        self.assertEqual(restarted.history(selection_only=True)['ids'], [ordinary])
+        self.assertEqual(restarted.gallery(favorite='yes', selection_only=True)['ids'], [])
+        before = restarted.stats()
+        for ids in ([favorite], [ordinary, favorite]):
+            with self.assertRaisesRegex(ValueError, '收藏'):
+                restarted.delete_runs(ids)
+        with self.assertRaisesRegex(ValueError, '收藏'):
+            restarted.reset_generation_data()
+        self.assertEqual(restarted.gallery()['total'], 2)
+        self.assertEqual(restarted.stats(), before)
+        with restarted.db() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM image_library').fetchone()[0], 2)
+        restarted.set_favorite(favorite, False)
+        self.assertEqual(restarted.delete_runs([favorite])['deleted'], 1)
+        self.assertEqual(restarted.stats(), before)
+        self.assertEqual(restarted.reset_generation_data()['deleted_runs'], 1)
+
+    def test_favorite_rejects_invalid_values_and_running_records(self):
+        rid = self.seed(status='running')[0]
+        with self.assertRaisesRegex(ValueError, '生成完成'):
+            self.monitor.set_favorite(rid, True)
+        for value in (None, 'false', 1, [], {}):
+            with self.assertRaises(ValueError):
+                self.monitor.set_favorite(rid, value)
+        with self.assertRaisesRegex(ValueError, '不存在'):
+            self.monitor.set_favorite(rid + 1, True)
+        for fetch in (self.monitor.history, self.monitor.gallery):
+            with self.assertRaises(ValueError):
+                fetch(favorite='invalid')
+
+    def test_favorite_migration_preserves_existing_artwork_and_statistics(self):
+        rid = self.seed()[0]
+        with self.monitor.db() as db:
+            db.execute('ALTER TABLE runs DROP COLUMN favorite')
+        before = self.monitor.stats()
+        restarted = Monitor(self.folder.name)
+        row = restarted.gallery()['items'][0]
+        self.assertEqual(row['id'], rid)
+        self.assertIs(row['favorite'], False)
+        self.assertTrue(row['has_svg'])
+        self.assertEqual(restarted.stats(), before)
+
+    def test_svg_export_embeds_safe_styles_and_ignores_external_resources(self):
+        styled = HTML.replace('<body>', '<head><style>rect {fill: tomato}</style></head><body>')
+        self.assertIn('rect {fill: tomato}', downloadable_svg(SVG, styled))
+        for css in ('@import "https://example.com/style.css";', 'rect{fill:url(https://example.com/image)}'):
+            unsafe = HTML.replace('<body>', '<head><style>' + css + '</style></head><body>')
+            self.assertEqual(downloadable_svg(SVG, unsafe), SVG)
+
+    def test_codex_invocations_use_fresh_directories_and_clean_up_after_failure(self):
+        fixture = Path(self.folder.name) / 'fake_codex.py'
+        locations = Path(self.folder.name) / 'locations.jsonl'
+        fixture.write_text('''import json, sys
+from pathlib import Path
+args = sys.argv[1:]
+assert args[0] == 'exec' and 'resume' not in args
+assert '--ephemeral' in args and '--ignore-user-config' in args
+assert '--ignore-rules' in args and 'project_doc_max_bytes=0' in args
+assert args[args.index('--sandbox') + 1] == 'read-only'
+assert 'features.shell_tool=false' in args and 'features.multi_agent=false' in args
+with (Path(__file__).parent / 'locations.jsonl').open('a') as log:
+    log.write(json.dumps(str(Path.cwd())) + '\\n')
+assert not (Path.cwd() / 'previous.txt').exists()
+(Path.cwd() / 'previous.txt').write_text('previous invocation')
+if args[args.index('--model') + 1] == 'fail':
+    sys.exit(1)
+Path(args[args.index('--output-last-message') + 1]).write_text(sys.stdin.read(), encoding='utf-8')
+print(json.dumps({'type':'turn.completed','usage':{}}))
+''', encoding='utf-8')
+        config = dict(model='fixture', effort='low', timeout_seconds=10)
+        with patch('codex_runner.codex_command', return_value=[sys.executable, str(fixture)]), \
+             patch('codex_runner.verify_account', return_value={}), \
+             patch('codex_runner.available_models', return_value=[]):
+            self.assertEqual(call_codex(config, 'first prompt')[0], 'first prompt')
+            self.assertEqual(call_codex(config, 'second prompt')[0], 'second prompt')
+            with self.assertRaisesRegex(ValueError, '生成失败'):
+                call_codex(dict(config, model='fail'), 'failed prompt')
+        paths = [Path(json.loads(line)) for line in locations.read_text().splitlines()]
+        self.assertEqual(len(set(paths)), 3)
+        self.assertTrue(all(not path.exists() for path in paths))
 
     def test_account_snapshot_is_private_and_not_reassigned_after_switch(self):
         legacy = self.seed(protocol="codex")[0]
@@ -375,6 +465,9 @@ class WorkflowTests(unittest.TestCase):
                 self.assertNotIn('accounts', public)
                 self.assertNotIn('account_fingerprint', public['items'][0])
             with self.assertRaises(error.HTTPError) as denied:
+                post(f'/api/admin/runs/{rid}/favorite', {'favorite':True})
+            self.assertEqual(denied.exception.code, 401)
+            with self.assertRaises(error.HTTPError) as denied:
                 client.open(base + f'/api/runs?page=1&account={account}')
             self.assertEqual(denied.exception.code, 401)
             with self.assertRaises(error.HTTPError) as denied:
@@ -403,6 +496,31 @@ class WorkflowTests(unittest.TestCase):
             with client.open(base + f'/api/runs/{rid}/html?preview=1') as response:
                 self.assertIn('pelican:preview-size', response.read().decode())
                 self.assertIn('sandbox allow-scripts', response.headers['Content-Security-Policy'])
+            with client.open(base + f'/api/runs/{rid}/svg') as response:
+                self.assertTrue(response.headers['Content-Disposition'].startswith('inline;'))
+            with client.open(base + f'/api/runs/{rid}/svg?download=1') as response:
+                self.assertTrue(response.headers['Content-Disposition'].startswith('attachment;'))
+                self.assertIn('.svg"', response.headers['Content-Disposition'])
+                self.assertEqual(response.headers.get_content_type(), 'image/svg+xml')
+                self.assertEqual(response.read().decode(), SVG)
+            styled = HTML.replace('<body>', '<head><style>rect {fill: tomato} @keyframes pedal {to {transform: rotate(360deg)}}</style></head><body>')
+            with self.monitor.db() as db:
+                db.execute('UPDATE runs SET output=? WHERE id=?', (styled, rid))
+            with client.open(base + f'/api/runs/{rid}/svg?download=1') as response:
+                self.assertIn('rect {fill: tomato}', response.read().decode())
+            with client.open(base + f'/api/runs/{rid}/html') as response:
+                self.assertEqual(response.read().decode(), styled)
+            with post(f'/api/admin/runs/{rid}/favorite', {'favorite':True}) as response:
+                self.assertTrue(json.load(response)['favorite'])
+            with client.open(base + '/api/runs?favorite=yes') as response:
+                self.assertEqual(json.load(response)['items'][0]['id'], rid)
+            for path, payload in (('/api/admin/runs/delete', {'ids':[rid]}),
+                                  ('/api/admin/database/reset', {'confirm':'RESET_GENERATION_DATA'})):
+                with self.assertRaises(error.HTTPError) as denied:
+                    post(path, payload)
+                self.assertEqual(denied.exception.code, 400)
+            with post(f'/api/admin/runs/{rid}/favorite', {'favorite':False}):
+                pass
             with post('/api/auth/logout', {}):
                 pass
             with client.open(base + '/api/auth/status') as response:

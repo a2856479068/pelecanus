@@ -26,6 +26,36 @@ function formatDuration(run, now = Date.now() / 1000 + clockOffset) {
 const selectedRuns = new Set();
 const pendingDeleteKey = 'pelican-pending-delete';
 let pendingDeleteAccount = 'all';
+const favoriteBusy = new Set();
+
+function favoriteButton(run) {
+  if (!adminAuthenticated) return run.favorite ? '<span class="favorite-label">★ 已收藏 · 删除保护</span>' : '';
+  return `<button class="button secondary favorite-button" data-favorite-run="${run.id}" aria-pressed="${Boolean(run.favorite)}" ${favoriteBusy.has(run.id) || ['running','queued'].includes(run.status) ? 'disabled' : ''}>${run.favorite ? '★ 取消收藏' : '☆ 收藏'}</button>`;
+}
+
+function svgDownload(run) {
+  return run.has_svg ? `<a class="button secondary" href="/api/runs/${run.id}/svg?download=1" download="${escapeHTML(run.filename)}">下载 SVG ↓</a>` : '';
+}
+
+async function toggleFavorite(id, favorite) {
+  if (favoriteBusy.has(id) || deleteBusy || selectionBusy) return;
+  favoriteBusy.add(id);
+  document.querySelectorAll(`[data-favorite-run="${id}"]`).forEach(button => button.disabled = true);
+  try {
+    const result = await deleteApi(`/api/admin/runs/${id}/favorite`, {favorite});
+    if (result.favorite) selectedRuns.delete(id);
+    while (polling) await new Promise(resolve => setTimeout(resolve, 50));
+    await refresh();
+    if ($('detail-dialog').open && $('detail-body').dataset.runId === String(id)) await showDetail(id);
+    operationMessage(result.favorite ? '已收藏，取消收藏前不能删除。' : '已取消收藏，现在可以删除。');
+  } catch (error) {
+    operationMessage(error.message, true);
+    if (error.status === 401) { adminAuthenticated = false; renderAuthState(); }
+  } finally {
+    favoriteBusy.delete(id);
+    updateSelectionControls();
+  }
+}
 
 async function api(path, body) {
   const response = await fetch(path, {method:body === undefined ? 'GET' : 'POST', headers:{...(body === undefined ? {} : {'Content-Type':'application/json'})}, ...(body === undefined ? {} : {body:JSON.stringify(body)})});
@@ -53,7 +83,7 @@ function cleanRunIds(ids) {
 }
 function renderAuthState() {
   $('gallery-logout').hidden = !adminAuthenticated;
-  $('gallery-auth-state').textContent = adminAuthenticated ? '已登录管理' : '管理登录后可删除';
+  $('gallery-auth-state').textContent = adminAuthenticated ? '已登录管理 · 收藏作品不可删除' : '管理登录后可收藏和删除';
   $('account-filter').hidden = !adminAuthenticated;
   if (!adminAuthenticated) {
     if ($('account-filter').value !== 'all') selectedRuns.clear();
@@ -159,7 +189,7 @@ async function confirmDelete(event) {
     updateSelectionControls();
   }
 }
-function selectableRun(run) { return run.status !== 'running' && run.status !== 'queued'; }
+function selectableRun(run) { return !run.favorite && run.status !== 'running' && run.status !== 'queued'; }
 function updateSelectionControls() {
   document.querySelectorAll('.gallery-filters select').forEach(select => select.disabled = polling || deleteBusy || selectionBusy);
   const available = records.filter(selectableRun);
@@ -182,6 +212,10 @@ function updateSelectionControls() {
   document.querySelectorAll('[data-delete-run]').forEach(button => {
     const run = records.find(item => item.id === Number(button.dataset.deleteRun));
     button.disabled = deleteBusy || (run && !selectableRun(run));
+  });
+  document.querySelectorAll('[data-favorite-run]').forEach(button => {
+    const run = records.find(item => item.id === Number(button.dataset.favoriteRun));
+    button.disabled = !adminAuthenticated || deleteBusy || selectionBusy || favoriteBusy.has(Number(button.dataset.favoriteRun)) || Boolean(run && ['running','queued'].includes(run.status));
   });
 }
 async function resumeDeleteAfterLogin() {
@@ -233,7 +267,7 @@ async function controlTesting(operation) {
 }
 
 function galleryQuery(page = galleryPage) {
-  return new URLSearchParams({page, status:$('filter').value, protocol:$('protocol-filter').value, source:$('source-filter').value, effort:$('effort-filter').value, has_svg:$('svg-filter').value, group_by:$('group-filter').value, account:adminAuthenticated ? $('account-filter').value : 'all'});
+  return new URLSearchParams({page, status:$('filter').value, protocol:$('protocol-filter').value, source:$('source-filter').value, effort:$('effort-filter').value, has_svg:$('svg-filter').value, favorite:$('favorite-filter').value, group_by:$('group-filter').value, account:adminAuthenticated ? $('account-filter').value : 'all'});
 }
 
 function renderState() {
@@ -326,14 +360,14 @@ function renderGallery() {
   const visible = records;
   records.filter(run => !selectableRun(run)).forEach(run => selectedRuns.delete(run.id));
   updateSelectionControls();
-  const filtered = ['filter', 'protocol-filter', 'source-filter', 'effort-filter', 'svg-filter', 'account-filter']
+  const filtered = ['filter', 'protocol-filter', 'source-filter', 'effort-filter', 'svg-filter', 'account-filter', 'favorite-filter']
     .some(id => $(id).value !== 'all');
   $('empty-state').hidden = galleryTotal > 0 || filtered;
   $('filter-empty').hidden = galleryTotal > 0 || !filtered;
   $('gallery-page').textContent = `第 ${galleryPage} / ${galleryPages} 页 · 共 ${galleryTotal} 条`;
   $('previous-page').disabled = polling || galleryPage <= 1;
   $('next-page').disabled = polling || galleryPage >= galleryPages;
-  const signature = JSON.stringify([adminAuthenticated, $('group-filter').value, visible.map(r => [r.id, r.status, r.has_svg, r.has_html, r.finished, r.group_key, r.account_label, r.account_fingerprint])]);
+  const signature = JSON.stringify([adminAuthenticated, $('group-filter').value, visible.map(r => [r.id, r.status, r.has_svg, r.has_html, r.finished, r.favorite, r.group_key, r.account_label, r.account_fingerprint])]);
   if ($('gallery').dataset.signature === signature) return;
   $('gallery').dataset.signature = signature;
   let lastGroup = null;
@@ -346,16 +380,18 @@ function renderGallery() {
       : r.has_svg
       ? `<img data-image="${r.id}" alt="模型生成的鹈鹕骑行 SVG" loading="lazy">`
       : `<span class="no-preview ${escapeHTML(r.status)}"><b aria-hidden="true">${r.status === 'running' ? '◌' : '↯'}</b>${r.status === 'running' ? '模型正在创作' : '暂无可预览的动画'}</span>`;
-    return heading + `<article class="run-card"><label class="run-select"><input type="checkbox" data-select-run="${r.id}" aria-label="选择作品 #${r.id}" ${selectedRuns.has(r.id) ? 'checked' : ''} ${!selectableRun(r) ? 'disabled' : ''}> 选择 #${r.id}</label><button class="preview" data-run="${r.id}" aria-label="${escapeHTML(date(r.started) + '，查看生成结果')}">${preview}<span class="overlay">查看结果 ↗</span></button><div class="card-body"><div class="card-top"><time>${date(r.started)}</time>${badge(r.status)}</div><p>${r.group_name ? '循环组：' : '单个：'}${escapeHTML(r.group_name || r.node_name || '历史记录')}</p>${adminAuthenticated ? `<p class="record-account">${escapeHTML(r.account_label || (r.protocol === 'codex' ? '账号未记录' : 'API 节点'))}</p>` : ''}<p class="card-model">${escapeHTML(r.model)} · ${escapeHTML(r.effort)} · ${formatDuration(r)}</p><p>${r.source === 'manual' ? '手动生成' : r.source === 'retry' ? '失败重试' : '定时生成'} · 鹈鹕骑行动画</p><button class="button secondary delete-run" type="button" data-delete-run="${r.id}" ${r.status === 'running' || r.status === 'queued' ? 'disabled' : ''}>删除作品和记录</button></div></article>`;
+    return heading + `<article class="run-card"><label class="run-select"><input type="checkbox" data-select-run="${r.id}" aria-label="选择作品 #${r.id}" ${selectedRuns.has(r.id) ? 'checked' : ''} ${!selectableRun(r) ? 'disabled' : ''}> 选择 #${r.id}</label><button class="preview" data-run="${r.id}" aria-label="${escapeHTML(date(r.started) + '，查看生成结果')}">${preview}<span class="overlay">查看结果 ↗</span></button><div class="card-body"><div class="card-top"><time>${date(r.started)}</time>${badge(r.status)}</div><p>${r.group_name ? '循环组：' : '单个：'}${escapeHTML(r.group_name || r.node_name || '历史记录')}</p>${adminAuthenticated ? `<p class="record-account">${escapeHTML(r.account_label || (r.protocol === 'codex' ? '账号未记录' : 'API 节点'))}</p>` : ''}<p class="card-model">${escapeHTML(r.model)} · ${escapeHTML(r.effort)} · ${formatDuration(r)}</p><p>${r.source === 'manual' ? '手动生成' : r.source === 'retry' ? '失败重试' : '定时生成'} · 鹈鹕骑行动画</p><div class="card-actions">${svgDownload(r)}${favoriteButton(r)}<button class="button secondary delete-run" type="button" data-delete-run="${r.id}" ${!selectableRun(r) ? 'disabled' : ''}>${r.favorite ? '已收藏 · 不可删除' : '删除作品和记录'}</button></div></div></article>`;
   }).join('');
   $('gallery').querySelectorAll('[data-run]').forEach(button => button.addEventListener('click', () => showDetail(Number(button.dataset.run))));
   $('gallery').querySelectorAll('[data-delete-run]').forEach(button => button.addEventListener('click', event => { event.stopPropagation(); askDelete(Number(button.dataset.deleteRun)); }));
+  $('gallery').querySelectorAll('[data-favorite-run]').forEach(button => button.addEventListener('click', () => toggleFavorite(Number(button.dataset.favoriteRun), button.getAttribute('aria-pressed') !== 'true')));
   $('gallery').querySelectorAll('[data-image]').forEach(img => attachImage(img, Number(img.dataset.image)));
   updateSelectionControls();
 }
 
 async function showDetail(id) {
   const sequence = ++detailSequence;
+  $('detail-body').dataset.runId = String(id);
   $('detail-title').textContent = '读取生成结果…';
   $('detail-body').replaceChildren();
   if (!$('detail-dialog').open) $('detail-dialog').showModal();
@@ -363,15 +399,10 @@ async function showDetail(id) {
     const r = await api(`/api/runs/${id}`);
     if (sequence !== detailSequence) return;
     $('detail-title').textContent = `鹈鹕动画 · ${date(r.started)}`;
-    $('detail-body').innerHTML = `${r.has_html ? `<div class="html-preview detail-html"><iframe data-fit-preview src="/api/runs/${r.id}/html?preview=1" sandbox="allow-scripts" title="模型生成的 HTML 动画"></iframe></div>` : r.has_svg ? '<img class="detail-image" id="detail-image" alt="模型生成的鹈鹕骑行 SVG 动画">' : ''}<div class="detail-meta">${badge(r.status)}<span>${r.group_name ? '循环组：' : '单个：'}${escapeHTML(r.group_name || r.node_name || '历史记录')}</span><span>${escapeHTML(r.model)} / ${escapeHTML(r.effort)}</span><span>${r.protocol === 'codex' ? '本机 Codex' : r.protocol === 'responses' ? 'Responses' : 'Chat Completions'}</span>${adminAuthenticated ? `<span>${escapeHTML(r.account_label || (r.protocol === 'codex' ? '账号未记录' : 'API 节点'))}</span>` : ''}<span>${formatDuration(r)}</span><span>${r.source === 'manual' ? '手动生成' : r.source === 'retry' ? '失败重试' : '定时生成'} #${r.id}</span></div>${r.error ? `<p class="detail-error">${escapeHTML(r.error)}</p>` : ''}<details open><summary>原始输出</summary><pre>${escapeHTML(r.output || '请求尚未返回内容')}</pre></details><details><summary>本轮固定提示词</summary><pre>${escapeHTML(r.prompt || '')}</pre></details><details><summary>请求信息与用量</summary><pre>${escapeHTML(JSON.stringify({api:r.base_url,requested_model:r.model,returned_model:r.returned_model,effort:r.effort,protocol:r.protocol,usage:r.usage},null,2))}</pre></details><div class="detail-actions">${r.has_html ? `<a class="button secondary" href="/api/runs/${r.id}/html" target="_blank" rel="noopener">打开原尺寸 HTML ↗</a>` : ''}${r.has_html ? `<a class="button secondary" href="/api/runs/${r.id}/html" download="${escapeHTML((r.filename || 'pelican.svg').replace(/\.svg$/, '.html'))}">下载 HTML ↓</a>` : ''}${r.has_svg ? '<button class="button secondary" id="download-svg">下载 SVG ↓</button>' : ''}<button class="button delete-run" id="delete-detail" type="button" ${r.status === 'running' || r.status === 'queued' ? 'disabled' : ''}>删除作品和记录</button></div>`;
+    $('detail-body').innerHTML = `${r.has_html ? `<div class="html-preview detail-html"><iframe data-fit-preview src="/api/runs/${r.id}/html?preview=1" sandbox="allow-scripts" title="模型生成的 HTML 动画"></iframe></div>` : r.has_svg ? '<img class="detail-image" id="detail-image" alt="模型生成的鹈鹕骑行 SVG 动画">' : ''}<div class="detail-meta">${badge(r.status)}<span>${r.group_name ? '循环组：' : '单个：'}${escapeHTML(r.group_name || r.node_name || '历史记录')}</span><span>${escapeHTML(r.model)} / ${escapeHTML(r.effort)}</span><span>${r.protocol === 'codex' ? '本机 Codex' : r.protocol === 'responses' ? 'Responses' : 'Chat Completions'}</span>${adminAuthenticated ? `<span>${escapeHTML(r.account_label || (r.protocol === 'codex' ? '账号未记录' : 'API 节点'))}</span>` : ''}<span>${formatDuration(r)}</span><span>${r.source === 'manual' ? '手动生成' : r.source === 'retry' ? '失败重试' : '定时生成'} #${r.id}</span></div>${r.error ? `<p class="detail-error">${escapeHTML(r.error)}</p>` : ''}<details open><summary>原始输出</summary><pre>${escapeHTML(r.output || '请求尚未返回内容')}</pre></details><details><summary>本轮固定提示词</summary><pre>${escapeHTML(r.prompt || '')}</pre></details><details><summary>请求信息与用量</summary><pre>${escapeHTML(JSON.stringify({api:r.base_url,requested_model:r.model,returned_model:r.returned_model,effort:r.effort,protocol:r.protocol,usage:r.usage},null,2))}</pre></details><div class="detail-actions">${r.has_html ? `<a class="button secondary" href="/api/runs/${r.id}/html" target="_blank" rel="noopener">打开原尺寸 HTML ↗</a>` : ''}${r.has_html ? `<a class="button secondary" href="/api/runs/${r.id}/html" download="${escapeHTML((r.filename || 'pelican.svg').replace(/\.svg$/, '.html'))}">下载 HTML ↓</a>` : ''}${svgDownload(r)}${favoriteButton(r)}<button class="button delete-run" id="delete-detail" type="button" ${!selectableRun(r) ? 'disabled' : ''}>${r.favorite ? '已收藏 · 不可删除' : '删除作品和记录'}</button></div>`;
     $('delete-detail').addEventListener('click', () => askDelete(id));
-    if (r.has_svg) {
-      if ($('detail-image')) attachImage($('detail-image'), id);
-      $('download-svg').addEventListener('click', async () => {
-        try { const link = document.createElement('a'); link.href = await imageURL(id); link.download = r.filename || `pelican-${String(id).padStart(6, '0')}.svg`; link.click(); }
-        catch (error) { message(error.message, true); }
-      });
-    }
+    if ($('detail-image')) attachImage($('detail-image'), id);
+    $('detail-body').querySelector('[data-favorite-run]')?.addEventListener('click', () => toggleFavorite(id, !r.favorite));
   } catch (error) {
     if (sequence === detailSequence) { $('detail-title').textContent = '无法读取记录'; $('detail-body').textContent = error.message; }
   }
@@ -452,7 +483,7 @@ function addGuestResult(result) {
   if (result.has_svg) {
     const url = `/api/guest/results/${encodeURIComponent(result.id)}/svg`;
     card.querySelector('img').src = url;
-    card.querySelector('.guest-download').href = url;
+    card.querySelector('.guest-download').href = url + '?download=1';
     card.querySelector('.guest-download').download = result.filename || `guest-pelican-${result.id}.svg`;
     card.querySelector('.guest-preview').addEventListener('click', () => {
       detailSequence++;
@@ -465,7 +496,7 @@ function addGuestResult(result) {
 }
 
 $('refresh').addEventListener('click', () => refresh());
-['filter','protocol-filter','source-filter','effort-filter','svg-filter','group-filter','account-filter'].forEach(id => {
+['filter','protocol-filter','source-filter','effort-filter','svg-filter','group-filter','account-filter','favorite-filter'].forEach(id => {
   $(id).addEventListener('change', () => { selectedRuns.clear(); updateSelectionControls(); refresh(1); });
 });
 $('previous-page').addEventListener('click', () => refresh(galleryPage - 1));
@@ -505,7 +536,7 @@ $('select-all-runs').addEventListener('click', async () => {
     if (galleryQuery(1).toString() !== original) throw new Error('筛选条件已更改，请重新全选');
     selectedRuns.clear();
     cleanRunIds(result.ids).forEach(id => selectedRuns.add(id));
-    operationMessage(`已全选当前筛选结果中的 ${selectedRuns.size} 项，包含所有页面；进行中的任务已跳过。`);
+    operationMessage(`已全选当前筛选结果中的 ${selectedRuns.size} 项，包含所有页面；进行中的任务和已收藏作品已跳过。`);
   } catch (error) { operationMessage(error.message, true); }
   finally { selectionBusy = false; updateSelectionControls(); }
 });

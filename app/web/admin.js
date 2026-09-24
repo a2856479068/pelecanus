@@ -343,7 +343,7 @@ async function refreshNodes() { nodes = await api('/api/admin/nodes'); renderNod
 const dateTime = value => value ? new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(value*1000)) : '—';
 function historyQuery(page = historyPage) {
   return new URLSearchParams({page, status:$('history-status').value, account:$('history-account').value,
-    model:$('history-model').value, group:$('history-group').value, period:$('history-period').value, search:$('history-search').value.trim()});
+    model:$('history-model').value, group:$('history-group').value, period:$('history-period').value, favorite:$('history-favorite').value, search:$('history-search').value.trim()});
 }
 function historyMessage(text, error = false) {
   $('history-message').textContent = text;
@@ -364,7 +364,7 @@ function recordDuration(run) {
   return seconds < 60 ? `${seconds.toFixed(1)} 秒` : `${Math.floor(seconds / 60)} 分 ${Math.floor(seconds % 60)} 秒`;
 }
 function updateHistorySelection() {
-  const available = runHistory.filter(run => !['running','queued'].includes(run.status));
+  const available = runHistory.filter(run => !run.favorite && !['running','queued'].includes(run.status));
   const here = available.filter(run => selectedHistory.has(run.id)).length;
   const blocked = busy || historyLoading || historySelecting;
   $('history-select-page').checked = available.length > 0 && here === available.length;
@@ -385,8 +385,8 @@ function updateHistorySelection() {
     input.disabled = blocked || !available.some(run => run.id === Number(input.dataset.selectHistory));
     input.closest('tr').classList.toggle('selected', input.checked);
   });
-  document.querySelectorAll('#admin-run-history [data-delete-run], #admin-run-history [data-retry]').forEach(button => {
-    button.disabled = blocked || (button.hasAttribute('data-retry') && Boolean(testingState?.running || testingState?.stopping));
+  document.querySelectorAll('#admin-run-history [data-delete-run], #admin-run-history [data-retry], #admin-run-history [data-favorite-run]').forEach(button => {
+    button.disabled = blocked || (button.hasAttribute('data-delete-run') && Boolean(runHistory.find(run => run.id === Number(button.dataset.deleteRun))?.favorite)) || (button.hasAttribute('data-retry') && Boolean(testingState?.running || testingState?.stopping));
   });
 }
 function renderRunMonitor() {
@@ -403,7 +403,7 @@ function renderRunMonitor() {
       const account = run.protocol !== 'codex' ? 'API 节点' : run.account_label || '账号未记录';
       const current = run.account_fingerprint && run.account_fingerprint === codexFingerprint;
       const inProgress = ['running','queued'].includes(run.status);
-      return `<tr><td data-label="记录"><label class="record-check"><input type="checkbox" data-select-history="${run.id}" aria-label="选择记录 #${run.id}" ${inProgress ? 'disabled' : ''}><b>#${run.id}</b></label><time>${dateTime(run.started)}</time></td><td data-label="账号"><span class="record-account">${escapeHTML(account)}</span>${current ? '<small class="current-account">当前账号</small>' : ''}${run.protocol === 'codex' && !run.account_fingerprint ? '<small>无法追溯账号</small>' : ''}</td><td data-label="模型"><b>${escapeHTML(run.model)}</b><small>${escapeHTML(run.effort)} · ${run.protocol === 'codex' ? '本机 Codex' : run.protocol === 'responses' ? 'Responses' : 'Chat Completions'}</small></td><td data-label="来源"><span>${escapeHTML(run.group_name || '单个模型')}</span><small>${({manual:'手动测试',scheduled:'定时测试',retry:'失败重试'})[run.source] || '历史记录'} · ${escapeHTML(run.node_name || '历史节点')}</small></td><td data-label="结果"><span class="badge ${escapeHTML(run.status)}">${escapeHTML(labels[run.status] || run.status)}</span><small>${inProgress ? '已耗时' : '耗时'} ${recordDuration(run)}</small>${run.error ? `<details class="record-error"><summary>失败原因</summary><p>${escapeHTML(run.error)}</p></details>` : ''}</td><td data-label="操作"><span class="record-assets">${[run.has_html ? 'HTML' : '', run.has_svg ? 'SVG' : ''].filter(Boolean).join(' · ') || (inProgress ? '等待输出' : '无可预览作品')}</span><div class="record-actions"><a class="button secondary" href="/?run=${run.id}" target="_blank" rel="noopener">查看输出 ↗</a>${run.status === 'error' ? `<button class="button secondary" type="button" data-retry="${run.id}">重试</button>` : ''}${!inProgress ? `<button class="button secondary delete-art-button" type="button" data-delete-run="${run.id}">删除</button>` : ''}</div></td></tr>`;
+      return `<tr><td data-label="记录"><label class="record-check"><input type="checkbox" data-select-history="${run.id}" aria-label="选择记录 #${run.id}" ${inProgress || run.favorite ? 'disabled' : ''}><b>#${run.id}</b></label><time>${dateTime(run.started)}</time></td><td data-label="账号"><span class="record-account">${escapeHTML(account)}</span>${current ? '<small class="current-account">当前账号</small>' : ''}${run.protocol === 'codex' && !run.account_fingerprint ? '<small>无法追溯账号</small>' : ''}</td><td data-label="模型"><b>${escapeHTML(run.model)}</b><small>${escapeHTML(run.effort)} · ${run.protocol === 'codex' ? '本机 Codex' : run.protocol === 'responses' ? 'Responses' : 'Chat Completions'}</small></td><td data-label="来源"><span>${escapeHTML(run.group_name || '单个模型')}</span><small>${({manual:'手动测试',scheduled:'定时测试',retry:'失败重试'})[run.source] || '历史记录'} · ${escapeHTML(run.node_name || '历史节点')}</small></td><td data-label="结果"><span class="badge ${escapeHTML(run.status)}">${escapeHTML(labels[run.status] || run.status)}</span><small>${inProgress ? '已耗时' : '耗时'} ${recordDuration(run)}</small>${run.error ? `<details class="record-error"><summary>失败原因</summary><p>${escapeHTML(run.error)}</p></details>` : ''}</td><td data-label="操作"><span class="record-assets">${[run.has_html ? 'HTML' : '', run.has_svg ? 'SVG' : ''].filter(Boolean).join(' · ') || (inProgress ? '等待输出' : '无可预览作品')}</span><div class="record-actions"><a class="button secondary" href="/?run=${run.id}" target="_blank" rel="noopener">查看输出 ↗</a>${run.status === 'error' ? `<button class="button secondary" type="button" data-retry="${run.id}">重试</button>` : ''}${run.has_svg ? `<a class="button secondary" href="/api/runs/${run.id}/svg?download=1" download="${escapeHTML(run.filename)}">下载 SVG ↓</a>` : ''}${!inProgress ? `<button class="button secondary favorite-button" data-favorite-run="${run.id}" aria-pressed="${Boolean(run.favorite)}">${run.favorite ? '★ 取消收藏' : '☆ 收藏'}</button><button class="button secondary delete-art-button" type="button" data-delete-run="${run.id}" ${run.favorite ? 'disabled' : ''}>${run.favorite ? '已收藏 · 不可删除' : '删除'}</button>` : ''}</div></td></tr>`;
     }).join('')}</tbody></table>` : '<div class="history-empty">没有符合筛选条件的生成记录。</div>';
   }
   updateHistorySelection();
@@ -428,7 +428,7 @@ async function refreshRuns(page = historyPage) {
     historyOptions('history-account', [{value:'all',label:'全部账号 / 接入方式'}, ...fresh.accounts.map(account => ({value:account.value,label:`${account.label}（${account.count} 条）`})), {value:'unknown',label:'账号未记录'}, {value:'api',label:'API 节点'}]);
     historyOptions('history-model', [{value:'all',label:'全部模型'}, ...fresh.models.map(model => ({value:model,label:model}))]);
     historyOptions('history-group', [{value:'all',label:'全部循环组'}, {value:'single',label:'单个模型 / 历史记录'}, ...fresh.groups.map(group => ({value:group,label:group}))]);
-    runHistory.filter(run => ['running','queued'].includes(run.status)).forEach(run => selectedHistory.delete(run.id));
+    runHistory.filter(run => run.favorite || ['running','queued'].includes(run.status)).forEach(run => selectedHistory.delete(run.id));
     runStats = stats;
     renderRunMonitor(); updateQuickRunButton();
   } finally {
@@ -625,7 +625,7 @@ function applyHistoryFilters() {
   historyMessage('');
   refreshRuns(1).catch(error => historyMessage(error.message, true));
 }
-['history-status','history-account','history-model','history-group','history-period'].forEach(id => $(id).addEventListener('change', applyHistoryFilters));
+['history-status','history-account','history-model','history-group','history-period','history-favorite'].forEach(id => $(id).addEventListener('change', applyHistoryFilters));
 $('history-search').addEventListener('input', () => {
   clearTimeout(historySearchTimer);
   historySequence++;
@@ -636,7 +636,7 @@ $('history-refresh').addEventListener('click', () => refreshRuns().catch(error =
 $('history-previous').addEventListener('click', () => refreshRuns(historyPage - 1).catch(error => historyMessage(error.message, true)));
 $('history-next').addEventListener('click', () => refreshRuns(historyPage + 1).catch(error => historyMessage(error.message, true)));
 $('history-select-page').addEventListener('change', event => {
-  runHistory.filter(run => !['running','queued'].includes(run.status)).forEach(run => event.target.checked ? selectedHistory.add(run.id) : selectedHistory.delete(run.id));
+  runHistory.filter(run => !run.favorite && !['running','queued'].includes(run.status)).forEach(run => event.target.checked ? selectedHistory.add(run.id) : selectedHistory.delete(run.id));
   historyMessage('');
   updateHistorySelection();
 });
@@ -657,7 +657,7 @@ $('history-select-all').addEventListener('click', async () => {
     const result = await api(`/api/admin/runs?${query}`);
     if (historyQuery(1).toString() !== signature) throw new Error('筛选已更改，请重新全选');
     selectedHistory.clear(); result.ids.forEach(id => selectedHistory.add(id));
-    historyMessage(`已选择全部 ${result.total} 项筛选结果（跨页），正在生成的任务已跳过。`);
+    historyMessage(`已选择全部 ${result.total} 项筛选结果（跨页），正在生成的任务和已收藏作品已跳过。`);
   } catch (error) { historyMessage(error.message, true); }
   finally { historySelecting = false; updateHistorySelection(); }
 });
@@ -674,7 +674,7 @@ $('database-reset').addEventListener('click', async () => {
     const result = await api('/api/admin/database/reset', {confirm:'RESET_GENERATION_DATA'});
     selectedHistory.clear(); batchRunIds.clear(); historyPage = 1;
     $('history-search').value = '';
-    for (const id of ['history-status','history-account','history-model','history-group','history-period']) $(id).value = 'all';
+    for (const id of ['history-status','history-account','history-model','history-group','history-period','history-favorite']) $(id).value = 'all';
     showConfig(await api('/api/admin/settings'));
     await Promise.all([refreshRuns(1), refreshNodes()]);
     historyMessage('生成记录与统计已初始化。');
@@ -688,6 +688,19 @@ $('database-reset').addEventListener('click', async () => {
   }
 });
 $('admin-run-history').addEventListener('click', async event => {
+  const favoriteButton = event.target.closest('[data-favorite-run]');
+  if (favoriteButton) {
+    if (busy || historyLoading || historySelecting) return;
+    const id = Number(favoriteButton.dataset.favoriteRun);
+    const favorite = favoriteButton.getAttribute('aria-pressed') !== 'true';
+    return action(async () => {
+      await api(`/api/admin/runs/${id}/favorite`, {favorite});
+      if (favorite) selectedHistory.delete(id);
+      await refreshRuns();
+      historyMessage(favorite ? '已收藏，取消收藏前不能删除。' : '已取消收藏，现在可以删除。');
+    });
+  }
+
   const deleteButton = event.target.closest('[data-delete-run]');
   if (deleteButton) return deleteHistory([Number(deleteButton.dataset.deleteRun)]);
   const button = event.target.closest('[data-retry]');

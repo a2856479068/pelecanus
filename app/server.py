@@ -412,6 +412,25 @@ def extract_html(output):
     return match.group() if match else ""
 
 
+def downloadable_svg(svg, output):
+    """Include safe document CSS so a standalone SVG retains its appearance."""
+    document = extract_html(output)
+    outside_svg = re.sub(r"<svg\b[\s\S]*?</svg\s*>", "", document, flags=re.I)
+    styles = re.findall(r"<style\b[^>]*>([\s\S]*?)</style\s*>", outside_svg, re.I)
+    if not styles:
+        return svg
+    try:
+        root = ET.fromstring(svg)
+        style = ET.Element("{http://www.w3.org/2000/svg}style")
+        style.text = "\n".join(styles)
+        root.insert(0, style)
+        ET.register_namespace("", "http://www.w3.org/2000/svg")
+        standalone, _, _ = inspect_svg(ET.tostring(root, encoding="unicode"))
+        return standalone or svg
+    except ET.ParseError:
+        return svg
+
+
 def fitted_preview(document):
     # Only the embedded preview gets this bridge. Downloads and saved output
     # retain the original document, including its styles and animation scripts.
@@ -564,6 +583,8 @@ class Monitor:
                 self.fail_guest(result, "服务重启，访客任务已中断，请重新提交")
                 db.execute("UPDATE guest_results SET created=?,result=? WHERE id=?", (time.time(), json.dumps(result), row["id"]))
             columns = {r[1] for r in db.execute("PRAGMA table_info(runs)")}
+            if "favorite" not in columns:
+                db.execute("ALTER TABLE runs ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0 CHECK(favorite IN (0,1))")
             if "test_version" not in columns:
                 db.execute("ALTER TABLE runs ADD COLUMN test_version INTEGER NOT NULL DEFAULT 1")
             if "tests" not in columns:
@@ -1254,14 +1275,18 @@ class Monitor:
         return [self.serialize(row, include_account=include_account) for row in rows]
 
     def history(self, page=1, status="all", account="all", model="all", group="all",
-                search="", period="all", selection_only=False):
+                search="", period="all", selection_only=False, favorite="all"):
         """Admin-only pagination and selection across the entire saved history."""
         if (type(page) is not int or not 1 <= page <= 1000000
                 or status not in ("all", "success", "error", "running", "cancelled")
                 or period not in ("all", "24h", "7d")
+                or favorite not in ("all", "yes", "no")
                 or any(not isinstance(value, str) or len(value) > 160 for value in (account, model, group, search))):
             raise ValueError("生成记录筛选参数无效")
         clauses, args = [], []
+        if favorite != "all":
+            clauses.append("r.favorite=?")
+            args.append(int(favorite == "yes"))
         if status == "success":
             clauses.append("r.status IN ('success','passed','invalid')")
         elif status != "all":
@@ -1286,7 +1311,7 @@ class Monitor:
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         with self.db() as db:
             if selection_only:
-                where += (" AND " if where else " WHERE ") + "r.status NOT IN ('running','queued')"
+                where += (" AND " if where else " WHERE ") + "r.status NOT IN ('running','queued') AND r.favorite=0"
                 ids = [row[0] for row in db.execute("SELECT r.id FROM runs r" + where + " ORDER BY r.id DESC", args)]
                 return dict(ids=ids, total=len(ids))
             total = db.execute("SELECT count(*) FROM runs r" + where, args).fetchone()[0]
@@ -1324,6 +1349,19 @@ class Monitor:
             raise ValueError("只有请求失败的记录可以重试")
         return self.start_run(source="retry", node_id=row["node_id"])
 
+    def set_favorite(self, run_id, favorite):
+        if type(favorite) is not bool:
+            raise ValueError("收藏状态必须为 true 或 false")
+        with self.lock, self.db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT status FROM runs WHERE id=?", (run_id,)).fetchone()
+            if not row:
+                raise ValueError("检测记录不存在")
+            if row["status"] in ("running", "queued"):
+                raise ValueError("生成完成后才可以收藏")
+            db.execute("UPDATE runs SET favorite=? WHERE id=?", (int(favorite), run_id))
+        return dict(id=run_id, favorite=favorite)
+
     def delete_runs(self, run_ids, account="all"):
         if not isinstance(run_ids, list) or not run_ids or len(run_ids) > 1000:
             raise ValueError("请提供 1–1000 个检测记录编号")
@@ -1334,12 +1372,15 @@ class Monitor:
         account_clause, account_args = account_filter(account)
         account_where = " AND " + account_clause if account_clause else ""
         with self.lock, self.db() as db:
-            rows = db.execute(f"SELECT r.id,r.status FROM runs r WHERE r.id IN ({placeholders})" + account_where,
+            db.execute("BEGIN IMMEDIATE")
+            rows = db.execute(f"SELECT r.id,r.status,r.favorite FROM runs r WHERE r.id IN ({placeholders})" + account_where,
                               [*run_ids, *account_args]).fetchall()
             if len(rows) != len(run_ids):
                 raise ValueError("所选记录不存在或不属于当前账号筛选" if account != "all" else "检测记录不存在")
             if any(row["status"] in ("running", "queued") for row in rows):
                 raise ValueError("检测正在运行，完成后才可以删除")
+            if any(row["favorite"] for row in rows):
+                raise ValueError("所选记录包含已收藏作品，请先取消收藏；本批次未删除任何记录")
             db.execute(f"DELETE FROM runs WHERE id IN ({placeholders})", run_ids)
         return {"deleted": len(run_ids)}
 
@@ -1349,6 +1390,8 @@ class Monitor:
             with self.db() as db:
                 db.execute("PRAGMA secure_delete=ON")
                 db.execute("BEGIN IMMEDIATE")
+                if db.execute("SELECT 1 FROM runs WHERE favorite=1 LIMIT 1").fetchone():
+                    raise ValueError("存在已收藏作品，请先取消全部收藏再初始化数据库")
                 if self.run_cancellations or db.execute("SELECT 1 FROM runs WHERE status IN ('running','queued') LIMIT 1").fetchone():
                     raise ValueError("正在生成，请先停止测试并等待当前请求结束")
                 if self.guest_queue.unfinished_tasks or db.execute(
@@ -1374,13 +1417,14 @@ class Monitor:
                     compacted=compacted)
 
     def gallery(self, page=1, status="all", protocol="all", source="all", effort="all",
-                has_svg="all", group_by="none", selection_only=False, account="all", include_account=False):
+                has_svg="all", group_by="none", selection_only=False, account="all", include_account=False, favorite="all"):
         allowed = {
             "status": ("all", "success", "error", "running", "cancelled"),
             "protocol": ("all", "responses", "chat", "codex"),
             "source": ("all", "manual", "scheduled", "retry"),
             "effort": ("all", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"),
             "has_svg": ("all", "yes", "no"),
+            "favorite": ("all", "yes", "no"),
             "group_by": ("none", "node", "loop_group", "model", "date"),
         }
         values = locals()
@@ -1389,6 +1433,9 @@ class Monitor:
         ):
             raise ValueError("画廊分页或筛选参数无效")
         clauses, args = [], []
+        if favorite != "all":
+            clauses.append("r.favorite=?")
+            args.append(int(favorite == "yes"))
         if account != "all" and not include_account:
             raise ValueError("账号筛选需要管理登录")
         account_clause, account_args = account_filter(account)
@@ -1415,7 +1462,7 @@ class Monitor:
         }.get(group_by)
         with self.db() as db:
             if selection_only:
-                selection_where = where + (" AND " if where else " WHERE ") + "r.status NOT IN ('running','queued')"
+                selection_where = where + (" AND " if where else " WHERE ") + "r.status NOT IN ('running','queued') AND r.favorite=0"
                 ids = [row[0] for row in db.execute(
                     "SELECT r.id FROM runs r LEFT JOIN image_library i ON i.run_id=r.id" + selection_where + " ORDER BY r.id DESC", args)]
                 return dict(ids=ids, total=len(ids))
@@ -1437,6 +1484,7 @@ class Monitor:
     @staticmethod
     def serialize(row, detail=False, include_account=False):
         result = dict(row)
+        result["favorite"] = bool(result.get("favorite", False))
         if not include_account:
             result.pop("account_fingerprint", None)
             result.pop("account_label", None)
@@ -1493,7 +1541,7 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
-    def send(self, data, content_type="application/json; charset=utf-8", status=200, svg=False, download_name=None, preview=False, auth_cookie=None):
+    def send(self, data, content_type="application/json; charset=utf-8", status=200, svg=False, download_name=None, preview=False, auth_cookie=None, attachment=False):
         if not isinstance(data, bytes):
             data = json.dumps(data, ensure_ascii=False).encode()
         self.send_response(status)
@@ -1505,7 +1553,8 @@ class Handler(BaseHTTPRequestHandler):
         if auth_cookie is not None:
             self.send_header("Set-Cookie", auth_cookie)
         if download_name:
-            self.send_header("Content-Disposition", f'inline; filename="{filename_slug(download_name, "result.svg", 180)}"')
+            disposition = "attachment" if attachment else "inline"
+            self.send_header("Content-Disposition", f'{disposition}; filename="{filename_slug(download_name, "result.svg", 180)}"')
         policy = "sandbox; default-src 'none'; style-src 'unsafe-inline'" if svg else "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
         if preview:
             policy = "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
@@ -1575,7 +1624,10 @@ class Handler(BaseHTTPRequestHandler):
                                              download_name=guest_filename(result).removesuffix(".svg") + ".html")
                         return self.send({"error":"未找到 HTML 文档"}, status=404)
                     if svg := result.get("svg"):
-                        return self.send(svg.encode(),"image/svg+xml; charset=utf-8",svg=True,download_name=guest_filename(result))
+                        if parse.parse_qs(url.query).get("download") == ["1"]:
+                            svg = downloadable_svg(svg, result.get("output", ""))
+                        return self.send(svg.encode(),"image/svg+xml; charset=utf-8",svg=True,download_name=guest_filename(result),
+                                         attachment=parse.parse_qs(url.query).get("download") == ["1"])
                 return self.send({"error":"结果已过期或不存在"},status=404)
             if url.path.startswith("/api/admin/"):
                 if not self.authorized():
@@ -1591,7 +1643,7 @@ class Handler(BaseHTTPRequestHandler):
                     if "page" in params:
                         try:
                             return self.send(monitor.history(page=int(params["page"][0]),
-                                **{key: params.get(key, ["all"])[0] for key in ("status", "account", "model", "group", "period")},
+                                **{key: params.get(key, ["all"])[0] for key in ("status", "account", "model", "group", "period", "favorite")},
                                 search=params.get("search", [""])[0], selection_only=params.get("selection", ["0"])[0] == "1"))
                         except ValueError as exc:
                             return self.send({"error":str(exc)}, status=400)
@@ -1618,14 +1670,14 @@ class Handler(BaseHTTPRequestHandler):
                 account = params.get("account", ["all"])[0]
                 if account != "all" and not include_account:
                     return self.send({"error": "账号筛选需要管理登录"}, status=401)
-                if "page" in params or "account" in params:
+                if "page" in params or "account" in params or "favorite" in params:
                     try:
                         return self.send(monitor.gallery(
                             page=int(params.get("page", ["1"])[0]), status=params.get("status", ["all"])[0],
                             protocol=params.get("protocol", ["all"])[0], source=params.get("source", ["all"])[0],
                             effort=params.get("effort", ["all"])[0], has_svg=params.get("has_svg", ["all"])[0],
                             group_by=params.get("group_by", ["none"])[0], selection_only=params.get("selection", ["0"])[0] == "1",
-                            account=account, include_account=include_account))
+                            account=account, include_account=include_account, favorite=params.get("favorite", ["all"])[0]))
                     except ValueError:
                         return self.send({"error":"画廊分页或筛选参数无效"},status=400)
                 before = parse.parse_qs(url.query).get("before", [None])[0]
@@ -1647,7 +1699,10 @@ class Handler(BaseHTTPRequestHandler):
                         return self.send({"error":"未找到 HTML 文档"}, status=404)
                     if match[2] == "/svg" and (row["library_svg"] or row["svg"]):
                         svg = row["library_svg"] or row["svg"]
-                        return self.send(redact(svg, {"base_url":row["base_url"]}).encode(), "image/svg+xml; charset=utf-8", svg=True, download_name=run_filename(row))
+                        if parse.parse_qs(url.query).get("download") == ["1"]:
+                            svg = downloadable_svg(svg, monitor.serialize(row, detail=True).get("output", ""))
+                        return self.send(redact(svg, {"base_url":row["base_url"]}).encode(), "image/svg+xml; charset=utf-8", svg=True, download_name=run_filename(row),
+                                         attachment=parse.parse_qs(url.query).get("download") == ["1"])
                     if not match[2]:
                         return self.send(monitor.serialize(row, detail=True, include_account=self.authorized()))
             return self.send({"error": "未找到记录"}, status=404)
@@ -1735,6 +1790,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(self.server.monitor.stop_run(int(stop[1])))
             if self.path == "/api/admin/runs/delete":
                 return self.send(self.server.monitor.delete_runs(values.get("ids"), account=values.get("account", "all")))
+            favorite = re.fullmatch(r"/api/admin/runs/([1-9]\d{0,17})/favorite", self.path)
+            if favorite:
+                return self.send(self.server.monitor.set_favorite(int(favorite[1]), values.get("favorite")))
             if self.path == "/api/admin/database/reset":
                 if values != {"confirm": "RESET_GENERATION_DATA"}:
                     raise ValueError("请先确认初始化生成数据")

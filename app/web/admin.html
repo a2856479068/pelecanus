@@ -61,6 +61,7 @@
           <label>生成账号<select id="history-account"><option value="all">全部账号 / 接入方式</option><option value="unknown">账号未记录</option><option value="api">API 节点</option></select></label>
           <label>生成模型<select id="history-model"><option value="all">全部模型</option></select></label>
           <label>循环组<select id="history-group"><option value="all">全部循环组</option><option value="single">单个模型 / 历史记录</option></select></label>
+          <label>收藏状态<select id="history-favorite"><option value="all">收藏不限</option><option value="yes">仅收藏</option><option value="no">未收藏</option></select></label>
           <label>时间范围<select id="history-period"><option value="all">全部时间</option><option value="24h">最近 24 小时</option><option value="7d">最近 7 天</option></select></label>
         </div>
         <div class="history-toolbar"><label><input id="history-select-page" type="checkbox">全选本页</label><button id="history-select-all" class="button secondary" type="button">全选筛选结果</button><span id="history-selection" role="status">已选 0 项</span><button id="history-clear" class="button secondary" type="button" disabled>清空选择</button><button id="history-delete" class="button secondary delete-art-button" type="button" disabled>删除所选</button></div>
@@ -69,7 +70,7 @@
         <nav class="gallery-pagination" aria-label="后台记录分页"><button id="history-previous" class="button secondary" type="button" disabled>上一页</button><span id="history-page" role="status">第 1 / 1 页</span><button id="history-next" class="button secondary" type="button" disabled>下一页</button></nav>
       </section>
       <section class="panel database-panel" aria-labelledby="database-title">
-        <div><div class="eyebrow">DATABASE</div><h2 id="database-title">初始化数据库</h2><p>清空当前实例的作品、原始输出、访客结果和全部请求统计，并暂停定时测试。管理员密码、登录状态、节点及循环组设置保留。</p><p id="database-message" class="form-message" role="status" aria-live="polite"></p></div>
+        <div><div class="eyebrow">DATABASE</div><h2 id="database-title">初始化数据库</h2><p>清空当前实例的作品、原始输出、访客结果和全部请求统计，并暂停定时测试。管理员密码、登录状态、节点及循环组设置保留。存在收藏作品时禁止初始化，请先取消收藏。</p><p id="database-message" class="form-message" role="status" aria-live="polite"></p></div>
         <button id="database-reset" class="button secondary delete-art-button" type="button">初始化生成数据</button>
       </section>
     </div>
