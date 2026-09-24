@@ -19,6 +19,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import CookieError, SimpleCookie
+from html.parser import HTMLParser
 from urllib import error, parse, request
 import xml.etree.ElementTree as ET
 
@@ -412,21 +413,64 @@ def extract_html(output):
     return match.group() if match else ""
 
 
+class SVGDocumentAssets(HTMLParser):
+    """Collect inline document assets without duplicating those inside the SVG."""
+    def __init__(self):
+        super().__init__(convert_charrefs=False)
+        self.svg_depth = 0
+        self.current = None
+        self.styles, self.scripts = [], []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "svg":
+            self.svg_depth += 1
+        if self.svg_depth == 0 and tag in ("style", "script"):
+            self.current = (tag, dict(attrs), [])
+
+    def handle_endtag(self, tag):
+        if self.current and tag == self.current[0]:
+            kind, attrs, parts = self.current
+            text = "".join(parts)
+            if kind == "style":
+                self.styles.append(text)
+            elif "src" not in attrs and text.strip():
+                self.scripts.append((attrs, text))
+            self.current = None
+        if tag == "svg":
+            self.svg_depth = max(0, self.svg_depth - 1)
+
+    def handle_data(self, data):
+        if self.current:
+            self.current[2].append(data)
+
+
 def downloadable_svg(svg, output):
-    """Include safe document CSS so a standalone SVG retains its appearance."""
-    document = extract_html(output)
-    outside_svg = re.sub(r"<svg\b[\s\S]*?</svg\s*>", "", document, flags=re.I)
-    styles = re.findall(r"<style\b[^>]*>([\s\S]*?)</style\s*>", outside_svg, re.I)
-    if not styles:
+    """Preserve inline animation drivers in downloads; previews remain script-free."""
+    assets = SVGDocumentAssets()
+    assets.feed(extract_html(output))
+    if not assets.styles and not assets.scripts:
         return svg
     try:
         root = ET.fromstring(svg)
-        style = ET.Element("{http://www.w3.org/2000/svg}style")
-        style.text = "\n".join(styles)
-        root.insert(0, style)
         ET.register_namespace("", "http://www.w3.org/2000/svg")
-        standalone, _, _ = inspect_svg(ET.tostring(root, encoding="unicode"))
-        return standalone or svg
+        if assets.styles:
+            style = ET.Element("{http://www.w3.org/2000/svg}style")
+            style.text = "\n".join(assets.styles)
+            root.insert(0, style)
+            standalone, _, _ = inspect_svg(ET.tostring(root, encoding="unicode"))
+            if not assets.scripts:
+                return standalone or svg
+            root = ET.fromstring(standalone or svg)
+        # SVG is an XML document. ElementTree escapes JS operators and strings
+        # correctly; copying a raw HTML <script> would produce malformed XML.
+        # Only the explicit attachment contains scripts, just like HTML downloads.
+        for attrs, source in assets.scripts:
+            script = ET.SubElement(root, "{http://www.w3.org/2000/svg}script")
+            for name in ("type", "id"):
+                if attrs.get(name):
+                    script.set(name, attrs[name])
+            script.text = source
+        return ET.tostring(root, encoding="unicode")
     except ET.ParseError:
         return svg
 
@@ -1624,10 +1668,11 @@ class Handler(BaseHTTPRequestHandler):
                                              download_name=guest_filename(result).removesuffix(".svg") + ".html")
                         return self.send({"error":"未找到 HTML 文档"}, status=404)
                     if svg := result.get("svg"):
-                        if parse.parse_qs(url.query).get("download") == ["1"]:
+                        download = parse.parse_qs(url.query).get("download") == ["1"]
+                        if download:
                             svg = downloadable_svg(svg, result.get("output", ""))
                         return self.send(svg.encode(),"image/svg+xml; charset=utf-8",svg=True,download_name=guest_filename(result),
-                                         attachment=parse.parse_qs(url.query).get("download") == ["1"])
+                                         attachment=download, preview=download)
                 return self.send({"error":"结果已过期或不存在"},status=404)
             if url.path.startswith("/api/admin/"):
                 if not self.authorized():
@@ -1699,10 +1744,11 @@ class Handler(BaseHTTPRequestHandler):
                         return self.send({"error":"未找到 HTML 文档"}, status=404)
                     if match[2] == "/svg" and (row["library_svg"] or row["svg"]):
                         svg = row["library_svg"] or row["svg"]
-                        if parse.parse_qs(url.query).get("download") == ["1"]:
+                        download = parse.parse_qs(url.query).get("download") == ["1"]
+                        if download:
                             svg = downloadable_svg(svg, monitor.serialize(row, detail=True).get("output", ""))
                         return self.send(redact(svg, {"base_url":row["base_url"]}).encode(), "image/svg+xml; charset=utf-8", svg=True, download_name=run_filename(row),
-                                         attachment=parse.parse_qs(url.query).get("download") == ["1"])
+                                         attachment=download, preview=download)
                     if not match[2]:
                         return self.send(monitor.serialize(row, detail=True, include_account=self.authorized()))
             return self.send({"error": "未找到记录"}, status=404)

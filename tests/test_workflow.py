@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 import unittest
+import xml.etree.ElementTree as ET
 from unittest.mock import patch
 from urllib import error, request
 
@@ -100,6 +101,15 @@ class WorkflowTests(unittest.TestCase):
         for css in ('@import "https://example.com/style.css";', 'rect{fill:url(https://example.com/image)}'):
             unsafe = HTML.replace('<body>', '<head><style>' + css + '</style></head><body>')
             self.assertEqual(downloadable_svg(SVG, unsafe), SVG)
+
+    def test_svg_export_preserves_inline_animation_scripts_as_valid_xml(self):
+        script = "const r=document.querySelector('rect'); if (1 < 2 && r) r.setAttribute('x', '10');"
+        output = HTML.replace('</body>', '<script>' + script + '</script><script src="https://example.com/external.js"></script></body>')
+        exported = ET.fromstring(downloadable_svg(SVG, output))
+        scripts = exported.findall('{http://www.w3.org/2000/svg}script')
+        self.assertEqual(len(scripts), 1)
+        self.assertEqual(scripts[0].text, script)
+        self.assertEqual(exported.get('viewBox'), '0 0 1200 800')
 
     def test_codex_invocations_use_fresh_directories_and_clean_up_after_failure(self):
         fixture = Path(self.folder.name) / 'fake_codex.py'
@@ -510,6 +520,20 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
                 self.assertIn('rect {fill: tomato}', response.read().decode())
             with client.open(base + f'/api/runs/{rid}/html') as response:
                 self.assertEqual(response.read().decode(), styled)
+            animated = styled.replace('</body>', '<script>document.querySelector("rect").setAttribute("x", "10");</script></body>')
+            with self.monitor.db() as db:
+                db.execute('UPDATE runs SET output=? WHERE id=?', (animated, rid))
+            with client.open(base + f'/api/runs/{rid}/svg') as response:
+                self.assertNotIn('<script', response.read().decode())
+                self.assertNotIn('allow-scripts', response.headers['Content-Security-Policy'])
+            with client.open(base + f'/api/runs/{rid}/svg?download=1') as response:
+                exported = ET.fromstring(response.read())
+                self.assertEqual(len(exported.findall('{http://www.w3.org/2000/svg}script')), 1)
+                self.assertTrue(response.headers['Content-Disposition'].startswith('attachment;'))
+                self.assertIn('sandbox allow-scripts', response.headers['Content-Security-Policy'])
+                self.assertIn("default-src 'none'", response.headers['Content-Security-Policy'])
+            with client.open(base + f'/api/runs/{rid}/html') as response:
+                self.assertEqual(response.read().decode(), animated)
             with post(f'/api/admin/runs/{rid}/favorite', {'favorite':True}) as response:
                 self.assertTrue(json.load(response)['favorite'])
             with client.open(base + '/api/runs?favorite=yes') as response:
