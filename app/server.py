@@ -89,14 +89,15 @@ def record_value(record, key, default=None):
 
 
 def run_filename(record):
-    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(float(record_value(record, "started") or 0)))
-    run_id = int(record_value(record, "id") or 0)
-    model = filename_slug(record_value(record, "model"), "model")
-    return f"pelican-{run_id:06d}-{stamp}-{model}.svg"
+    started = record_value(record, "started") or record_value(record, "submitted") or record_value(record, "created") or 0
+    # Match the gallery's UTC+8 display, even when the server runs in UTC.
+    stamp = time.strftime("%m%d-%H%M%S", time.gmtime(float(started) + 8 * 3600))
+    model = re.sub(r"^gpt-(?=\d)", "gpt", filename_slug(record_value(record, "model"), "model"), flags=re.I)
+    return f"{model}-{stamp}.svg"
 
 
 def guest_filename(result):
-    return f"guest-pelican-{filename_slug(result.get('id'), 'result', 32)}.svg"
+    return run_filename(result)
 
 
 def mask_url(value):
@@ -1239,7 +1240,7 @@ class Monitor:
         svg = public.pop("svg", "")
         public["has_svg"] = bool(svg)
         public["has_html"] = bool(extract_html(public.get("output")))
-        if public["has_svg"]:
+        if public["has_svg"] or public["has_html"]:
             public["filename"] = guest_filename(public)
         if public["status"] == "success":
             public["error"] = ""

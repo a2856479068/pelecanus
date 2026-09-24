@@ -28,7 +28,7 @@ python -m venv .venv
 
 Windows 可运行 `build-exe.ps1` 构建单文件 `dist/PelicanWatch.exe`。需要先安装 PyInstaller（`python -m pip install pyinstaller`），并单独安装、登录 Codex CLI；EXE 不包含 Codex CLI、登录凭据、数据库或图片。把 EXE 放在项目的 `dist` 目录运行时，会沿用 `app/data/monitor.sqlite3` 中的管理员密码和节点配置。EXE 单独放到其他目录时，数据存于 `%LOCALAPPDATA%\PelicanWatch\data`；首次使用需设置管理密码。运行后会打开浏览器，控制台窗口关闭即停止服务。
 
-下载文件使用 `pelican-六位编号-UTC时间-模型.svg` 或 `guest-pelican-任务编号.svg` 的固定格式。图片没有单独的文件夹：本机保存在 `app/data/monitor.sqlite3`，Docker 保存在持久卷的 `/data/monitor.sqlite3`。SVG 位于 `image_library` 图片库（旧版 `runs.svg` 也可能保留副本），生成的 HTML 与原始输出位于 `runs` 表。删除作品会删除这些内容与对应记录；`run_outcomes` 仅保留请求编号、时间和结果用于计算最近 24 小时成功率，手动取消不计入成功率分母。迁移前已经删除且没有备份的请求结果无法追溯。可选 Docker 方式仍使用原项目的 `docker compose up -d --build`；容器无法直接复用宿主机的 ChatGPT 登录缓存，适合继续配置兼容 API 节点。
+下载文件统一使用 `模型简称-MMDD-HHMMSS.svg`，例如 `gpt6-sol-0924-164501.svg`；时间与页面一致，使用 UTC+8 的请求开始时间。HTML 使用相同名称，仅扩展名为 `.html`；访客结果也使用同一规则。图片没有单独的文件夹：本机保存在 `app/data/monitor.sqlite3`，Docker 保存在持久卷的 `/data/monitor.sqlite3`。SVG 位于 `image_library` 图片库（旧版 `runs.svg` 也可能保留副本），生成的 HTML 与原始输出位于 `runs` 表。删除作品会删除这些内容与对应记录；`run_outcomes` 仅保留请求编号、时间和结果用于计算最近 24 小时成功率，手动取消不计入成功率分母。迁移前已经删除且没有备份的请求结果无法追溯。可选 Docker 方式仍使用原项目的 `docker compose up -d --build`；容器无法直接复用宿主机的 ChatGPT 登录缓存，适合继续配置兼容 API 节点。
 
 自托管的模型接口观察站，通过固定的鹈鹕 SVG 任务记录模型的请求结果与生成内容。支持 OpenAI 兼容的 Responses 和 Chat Completions 协议，提供公开画廊、历史时间线、后台节点管理和访客独立测试。
 
