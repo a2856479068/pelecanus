@@ -62,3 +62,4 @@
 .card-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.card-actions .button{margin-top:0}.favorite-button[aria-pressed="true"],.favorite-label{color:#826016;background:#fff5dc;border-color:#ddc58d}.favorite-label{display:inline-flex;align-items:center;padding:8px 10px;border-radius:6px;font-size:12px}
 
 #task-prompt-editor{display:block;width:100%;min-height:140px;resize:vertical;padding:12px;border:1px solid var(--line,#dde5df);border-radius:8px;background:#fafcf9;color:inherit;font:inherit;line-height:1.7}#admin-sync{margin:0 0 6px}.testing-controls #gallery-once{grid-column:1/-1}
+.records-page .records-panel{margin-top:0}.records-page .admin-run-history{max-height:none}.records-page .page-head{padding-bottom:28px}

@@ -3,9 +3,9 @@
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>后台管理 · 鹈鹕观察站</title><link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/style.css"><script defer src="/privacy.js"></script><script defer src="/live.js"></script><script defer src="/admin.js"></script></head>
 <body>
   <a class="skip-link" href="#admin-content">跳到主要内容</a>
-  <nav class="topbar" aria-label="主导航"><a class="brand" href="/"><img src="/favicon.svg" alt="" width="30" height="30">鹈鹕观察站 <span>ADMIN CONSOLE</span></a><div class="action-buttons"><a class="button secondary" href="#run-records">生成记录</a><button class="button secondary" id="logout" hidden>退出登录</button><a class="button secondary" href="/">返回公开页面 ↗</a></div></nav>
+  <nav class="topbar" aria-label="主导航"><a class="brand" href="/"><img src="/favicon.svg" alt="" width="30" height="30">鹈鹕观察站 <span>ADMIN CONSOLE</span></a><div class="action-buttons"><a class="button secondary" href="/admin/records" target="_blank" rel="noopener">生成记录 ↗</a><button class="button secondary" id="logout" hidden>退出登录</button><a class="button secondary" href="/">返回公开页面 ↗</a></div></nav>
   <main class="admin-main" id="main-content">
-    <header class="page-head"><div><div class="eyebrow">PELICAN STUDIO <span>/ ADMIN</span></div><h1>鹈鹕动画<span class="accent">定时生成</span></h1><p>选模型、设间隔；结果可在公开画廊查看或在作品管理中删除。</p></div><span class="badge neutral" id="admin-status">连接管理服务中</span></header>
+    <header class="page-head"><div><div class="eyebrow">PELICAN STUDIO <span>/ ADMIN</span></div><h1>鹈鹕动画<span class="accent">定时生成</span></h1><p>选择模型、调整提示词和生成间隔。需要管理作品时，打开右上角的“生成记录”。</p></div><span class="badge neutral" id="admin-status">连接管理服务中</span></header>
     <div id="admin-content" hidden>
       <section class="panel settings-panel codex-account"><div><div class="eyebrow">CHATGPT LOGIN</div><h2>Codex 当前个人账号</h2><p id="codex-status" role="status">正在读取本机登录状态…</p><p class="field-note">每 5 秒核对一次；切换后显示新账号的脱敏邮箱。生成记录保留请求开始时的个人账号。</p><p id="codex-login-hint" role="alert" hidden></p></div><button class="button secondary" id="refresh-codex" type="button">刷新账号与模型</button></section>
       <form id="admin-form" autocomplete="off" class="admin-layout system-form">
@@ -51,29 +51,6 @@
 
       </div></details>
 
-      <section id="run-records" class="panel records-panel" aria-labelledby="run-monitor-title">
-        <div class="records-heading"><div><div class="eyebrow">GENERATION HISTORY</div><h2 id="run-monitor-title">生成记录</h2><p>按账号、模型和循环组查找作品，查看请求结果并批量管理。</p></div><button id="history-refresh" class="button secondary" type="button">刷新记录</button></div>
-        <p class="record-account-note">新记录标记请求开始时的个人账号和脱敏邮箱。旧版工作区标记无法区分具体用户，不自动归给当前账号；更早记录显示“账号未记录”。API 节点不对应 ChatGPT 账号。删除作品后仍保留最少的时间与结果用于统计，成功率按请求成功 ÷（成功＋失败）计算；手动取消不计入。迁移前已删除且没有备份的请求无法追溯。</p>
-        <div class="records-stats-heading">最近 24 小时 · 站点已追踪请求（含已删除作品）</div><div id="admin-stats" class="admin-stats" aria-label="最近 24 小时统计"></div>
-        <div id="admin-run-progress" class="admin-run-progress" role="status" aria-live="polite">暂无测试任务。</div>
-        <div class="history-filters">
-          <label class="history-search">搜索记录<input id="history-search" type="search" maxlength="160" placeholder="编号、模型、循环组、账号标记" autocomplete="off"></label>
-          <label>请求状态<select id="history-status"><option value="all">全部状态</option><option value="success">请求成功</option><option value="error">请求失败</option><option value="cancelled">手动取消</option><option value="running">生成中</option></select></label>
-          <label>生成账号<select id="history-account"><option value="all">全部账号 / 接入方式</option><option value="unknown">账号未记录</option><option value="api">API 节点</option></select></label>
-          <label>生成模型<select id="history-model"><option value="all">全部模型</option></select></label>
-          <label>循环组<select id="history-group"><option value="all">全部循环组</option><option value="single">单个模型 / 历史记录</option></select></label>
-          <label>收藏状态<select id="history-favorite"><option value="all">收藏不限</option><option value="yes">仅收藏</option><option value="no">未收藏</option></select></label>
-          <label>时间范围<select id="history-period"><option value="all">全部时间</option><option value="24h">最近 24 小时</option><option value="7d">最近 7 天</option></select></label>
-        </div>
-        <div class="history-toolbar"><label><input id="history-select-page" type="checkbox">全选本页</label><button id="history-select-all" class="button secondary" type="button">全选筛选结果</button><span id="history-selection" role="status">已选 0 项</span><button id="history-clear" class="button secondary" type="button" disabled>清空选择</button><button id="history-delete" class="button secondary delete-art-button" type="button" disabled>删除所选</button></div>
-        <p id="history-message" class="form-message" role="status" aria-live="polite"></p>
-        <div id="admin-run-history" class="admin-run-history"></div>
-        <nav class="gallery-pagination" aria-label="后台记录分页"><button id="history-previous" class="button secondary" type="button" disabled>上一页</button><span id="history-page" role="status">第 1 / 1 页</span><button id="history-next" class="button secondary" type="button" disabled>下一页</button></nav>
-      </section>
-      <section class="panel database-panel" aria-labelledby="database-title">
-        <div><div class="eyebrow">DATABASE</div><h2 id="database-title">初始化数据库</h2><p>清空当前实例的作品、原始输出、访客结果和全部请求统计，并暂停定时测试。管理员密码、登录状态、节点及循环组设置保留。存在收藏作品时禁止初始化，请先取消收藏。</p><p id="database-message" class="form-message" role="status" aria-live="polite"></p></div>
-        <button id="database-reset" class="button secondary delete-art-button" type="button">初始化生成数据</button>
-      </section>
     </div>
     <footer><span>后台配置修改仅对站点任务生效，访客测试独立执行。</span><span class="footer-source"><a href="https://github.com/fishxcode/pelecanus" target="_blank" rel="noopener noreferrer">GitHub 源码 ↗</a><span class="footer-divider">/</span><span>Commit <code>__GIT_COMMIT__</code></span></span><a href="/">查看公开观察站 ↗</a></footer>
   </main>

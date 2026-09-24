@@ -1821,6 +1821,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send(monitor.runs(int(before) if before else None, include_account=True))
                 if url.path == "/api/admin/stats":
                     return self.send(monitor.stats())
+                if url.path == "/api/admin/codex/account":
+                    return self.send(login_status())
                 if url.path == "/api/admin/codex":
                     status = login_status()
                     try:
@@ -1875,7 +1877,7 @@ class Handler(BaseHTTPRequestHandler):
                     if not match[2]:
                         return self.send(monitor.serialize(row, detail=True, include_account=self.authorized()))
             return self.send({"error": "未找到记录"}, status=404)
-        files = {"/": "index.html", "/admin": "admin.html", "/admin/": "admin.html", "/admin.js": "admin.js", "/privacy.js": "privacy.js", "/live.js": "live.js", "/previews.js": "previews.js", "/app.js": "app.js", "/style.css": "style.css", "/favicon.svg": "favicon.svg"}
+        files = {"/": "index.html", "/admin": "admin.html", "/admin/": "admin.html", "/admin/records": "records.html", "/admin/records/": "records.html", "/admin.js": "admin.js", "/records.js": "records.js", "/privacy.js": "privacy.js", "/live.js": "live.js", "/previews.js": "previews.js", "/app.js": "app.js", "/style.css": "style.css", "/favicon.svg": "favicon.svg"}
         name = files.get(url.path)
         if name:
             types = {"html": "text/html", "js": "text/javascript", "css": "text/css", "svg": "image/svg+xml"}
