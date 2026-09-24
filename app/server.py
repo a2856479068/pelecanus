@@ -445,6 +445,55 @@ class SVGDocumentAssets(HTMLParser):
             self.current[2].append(data)
 
 
+class SVGDocumentContext(HTMLParser):
+    """Keep non-graphical controls referenced by the original animation script."""
+    VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
+    OMIT = {"svg", "script", "style", "iframe", "object", "embed", "img", "audio", "video", "source", "link", "meta", "base"}
+    ATTRS = {"id", "class", "type", "value", "name", "min", "max", "step", "checked", "selected", "disabled", "multiple", "for", "role", "open"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.root = None
+        self.stack = []
+        self.ancestors = []
+
+    def handle_starttag(self, tag, attrs):
+        safe_attrs = {name: value or "" for name, value in attrs
+                      if name in self.ATTRS or name.startswith(("data-", "aria-"))}
+        if tag == "body" and self.root is None:
+            self.root = ET.Element("{http://www.w3.org/1999/xhtml}body", safe_attrs)
+            self.stack.append((tag, self.root))
+            return
+        if not self.stack:
+            return
+        parent = self.stack[-1][1]
+        if tag == "svg" and parent is not None and not self.ancestors:
+            self.ancestors = [node for _, node in self.stack if node is not None]
+        node = None if parent is None or tag in self.OMIT else ET.SubElement(
+            parent, "{http://www.w3.org/1999/xhtml}" + tag, safe_attrs)
+        if tag not in self.VOID:
+            self.stack.append((tag, node))
+
+    def handle_endtag(self, tag):
+        for index in range(len(self.stack) - 1, -1, -1):
+            if self.stack[index][0] == tag:
+                del self.stack[index:]
+                break
+
+    def handle_startendtag(self, tag, attrs):
+        self.handle_starttag(tag, attrs)
+        if tag not in self.VOID:
+            self.handle_endtag(tag)
+
+    def handle_data(self, data):
+        node = self.stack[-1][1] if self.stack else None
+        if node is not None:
+            if len(node):
+                node[-1].tail = (node[-1].tail or "") + data
+            else:
+                node.text = (node.text or "") + data
+
+
 def downloadable_svg(svg, output):
     """Preserve inline animation drivers in downloads; previews remain script-free."""
     assets = SVGDocumentAssets()
@@ -459,9 +508,33 @@ def downloadable_svg(svg, output):
             style.text = "\n".join(assets.styles)
             root.insert(0, style)
             standalone, _, _ = inspect_svg(ET.tostring(root, encoding="unicode"))
-            if not assets.scripts:
-                return standalone or svg
+            if not standalone and not assets.scripts:
+                return svg
             root = ET.fromstring(standalone or svg)
+        if assets.scripts:
+            context = SVGDocumentContext()
+            context.feed(extract_html(output))
+            if context.root is not None and len(context.root):
+                # Controls stay available to getElementById/querySelector but do
+                # not contribute to the artwork's bounds or visible content.
+                hidden = ET.SubElement(root, "{http://www.w3.org/2000/svg}foreignObject",
+                                       {"width": "0", "height": "0", "style": "display:none !important",
+                                        "aria-hidden": "true", "data-pelican-context": ""})
+                hidden.append(context.root)
+                for node in context.ancestors:
+                    node.set("data-pelican-ancestor", "")
+                bridge = ET.SubElement(root, "{http://www.w3.org/2000/svg}script")
+                bridge.text = """(() => {
+  const art = document.documentElement;
+  const context = art.querySelector('[data-pelican-context]');
+  const ancestors = [...context.querySelectorAll('[data-pelican-ancestor]')];
+  const ownClasses = [...art.classList];
+  const sync = () => art.setAttribute('class', [...new Set([
+    ...ownClasses, ...ancestors.flatMap(element => [...element.classList])
+  ])].join(' '));
+  new MutationObserver(sync).observe(context, {attributes:true, attributeFilter:['class'], subtree:true});
+  sync();
+})();"""
         # SVG is an XML document. ElementTree escapes JS operators and strings
         # correctly; copying a raw HTML <script> would produce malformed XML.
         # Only the explicit attachment contains scripts, just like HTML downloads.
@@ -471,6 +544,11 @@ def downloadable_svg(svg, output):
                 if attrs.get(name):
                     script.set(name, attrs[name])
             script.text = source
+        if root.get("viewBox"):
+            # HTML's svg { height:auto } can make a standalone document taller
+            # than its viewport and clip the wheels. Fit the entire viewBox.
+            root.set("style", root.get("style", "").rstrip(";") +
+                     ";width:100% !important;height:100% !important;max-width:none !important;max-height:none !important")
         return ET.tostring(root, encoding="unicode")
     except ET.ParseError:
         return svg
