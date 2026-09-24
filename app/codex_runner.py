@@ -19,11 +19,28 @@ _catalog_lock = threading.Lock()
 _catalog = None
 _catalog_at = 0
 _catalog_account = ""
+_catalog_command = None
+
+
+def desktop_codex_command():
+    """Find the desktop-managed CLI even outside the app's inherited PATH."""
+    if os.name != "nt":
+        return None
+    local = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+    root = local / "OpenAI" / "Codex" / "bin"
+    try:
+        # Desktop updates use versioned folders. Prefer the latest installed
+        # executable and ignore folders that contain no CLI.
+        candidates = [(path.stat().st_mtime_ns, str(path), path)
+                      for path in root.glob("*/codex.exe") if path.is_file()]
+        return str(max(candidates)[2]) if candidates else None
+    except OSError:
+        return None
 
 
 def codex_command():
     explicit = os.environ.get("PELICAN_CODEX_BIN")
-    executable = explicit or shutil.which("codex.exe") or shutil.which("codex")
+    executable = explicit or desktop_codex_command() or shutil.which("codex.exe") or shutil.which("codex")
     if not executable:
         raise ValueError("未找到 Codex CLI，请安装 @openai/codex 并执行 codex login")
     path = Path(executable).resolve()
@@ -95,16 +112,18 @@ def verify_account(config):
 
 def available_models(account_fingerprint=None, force_refresh=False):
     """Read model metadata through the public app-server protocol, no generation."""
-    global _catalog, _catalog_at, _catalog_account
+    global _catalog, _catalog_at, _catalog_account, _catalog_command
     with _catalog_lock:
+        command = codex_command()
         account_fingerprint = account_fingerprint if account_fingerprint is not None else _account_fingerprint(_account_id())
         if (not force_refresh and _catalog is not None and _catalog_account == account_fingerprint
+                and _catalog_command == command
                 and time.monotonic() - _catalog_at < 300):
             return _catalog
         incoming = queue.Queue()
         with tempfile.TemporaryDirectory(prefix="pelican-models-") as folder:
             try:
-                process = subprocess.Popen(codex_command() + ["app-server", "-c", 'model_provider="openai"'],
+                process = subprocess.Popen(command + ["app-server", "-c", 'model_provider="openai"'],
                                            cwd=folder, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                            stderr=subprocess.DEVNULL, env=cli_environment(), **process_options())
             except OSError as exc:
@@ -149,6 +168,7 @@ def available_models(account_fingerprint=None, force_refresh=False):
                         break
                     identifier += 1
                 _catalog, _catalog_at, _catalog_account = models, time.monotonic(), account_fingerprint
+                _catalog_command = command
                 return models
             except (queue.Empty, OSError):
                 raise ValueError("读取模型列表超时，可手动填写当前账号可用的模型") from None
