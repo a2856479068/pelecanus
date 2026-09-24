@@ -32,6 +32,7 @@
 !/app/web/preview-bridge.js
 !/app/web/style.css
 !/app/web/favicon.svg
+!/app/web/favicon.ico
 !/zeabur/
 /zeabur/*
 !/zeabur/template.yaml

@@ -25,6 +25,7 @@ exe = EXE(
     a.datas,
     [],
     name="PelicanWatch",
+    icon=str(APP / "web" / "favicon.ico"),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
