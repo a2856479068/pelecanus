@@ -1,7 +1,7 @@
 *
 !server.py
-!visual_review.py
-!render_frames.py
+!codex_runner.py
+!local_runtime.py
 !requirements.txt
 !web/
 !web/**

@@ -2,6 +2,7 @@
 /*
 !/.gitignore
 !/README.md
+!/build-exe.ps1
 !/LICENSE
 !/compose.yaml
 !/Dockerfile
@@ -9,9 +10,14 @@
 !/app/
 /app/*
 !/app/server.py
-!/app/visual_review.py
-!/app/render_frames.py
+!/app/codex_runner.py
+!/app/local_runtime.py
+!/app/PelicanWatch.spec
+!/start.bat
+!/start.ps1
+!/tests/
 !/app/entrypoint.py
+!/app/windows_entrypoint.py
 !/app/Dockerfile
 !/app/.dockerignore
 !/app/requirements.txt
@@ -22,6 +28,8 @@
 !/app/web/app.js
 !/app/web/admin.js
 !/app/web/privacy.js
+!/app/web/previews.js
+!/app/web/preview-bridge.js
 !/app/web/style.css
 !/app/web/favicon.svg
 !/zeabur/
@@ -33,6 +41,13 @@
 **/backups/
 **/__pycache__/
 **/.venv/
+**/venv/
+**/.pytest_cache/
+**/.mypy_cache/
+**/build/
+**/dist/
+**/.runtime/
+*.exe
 **/node_modules/
 .env
 .env.*

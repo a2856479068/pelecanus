@@ -3,39 +3,86 @@
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>后台管理 · 鹈鹕观察站</title><link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/style.css"><script defer src="/privacy.js"></script><script defer src="/admin.js"></script></head>
 <body>
   <a class="skip-link" href="#admin-content">跳到主要内容</a>
-  <nav class="topbar" aria-label="主导航"><a class="brand" href="/"><img src="/favicon.svg" alt="" width="30" height="30">鹈鹕观察站 <span>ADMIN CONSOLE</span></a><div class="action-buttons"><button class="button secondary" id="logout" hidden>退出登录</button><a class="button secondary" href="/">返回公开页面 ↗</a></div></nav>
+  <nav class="topbar" aria-label="主导航"><a class="brand" href="/"><img src="/favicon.svg" alt="" width="30" height="30">鹈鹕观察站 <span>ADMIN CONSOLE</span></a><div class="action-buttons"><a class="button secondary" href="#run-records">生成记录</a><button class="button secondary" id="logout" hidden>退出登录</button><a class="button secondary" href="/">返回公开页面 ↗</a></div></nav>
   <main class="admin-main" id="main-content">
-    <header class="page-head"><div><div class="eyebrow">SYSTEM SETTINGS <span>/ ADMIN</span></div><h1>后台检测，由你设定<span class="accent">。</span></h1><p>保存即生效，无需重启服务。公开页面只展示脱敏信息。</p></div><span class="badge neutral" id="admin-status">连接管理服务中</span></header>
+    <header class="page-head"><div><div class="eyebrow">PELICAN STUDIO <span>/ ADMIN</span></div><h1>鹈鹕动画<span class="accent">定时生成</span></h1><p>选模型、设间隔；结果可在公开画廊查看或在作品管理中删除。</p></div><span class="badge neutral" id="admin-status">连接管理服务中</span></header>
     <div id="admin-content" hidden>
-      <section class="panel settings-panel admin-settings nodes-panel" aria-labelledby="nodes-title">
-        <div class="nodes-heading"><div class="section-heading"><span class="number">01</span><div><h2 id="nodes-title">模型节点</h2><p>可复制节点、批量勾选检测；定时任务会按顺序检测所有已启用节点。</p></div></div><div class="action-buttons"><button class="button secondary" type="button" id="bulk-run" disabled>检测所选节点</button><button class="button primary" type="button" id="add-node">＋ 新增节点</button></div></div>
-        <div class="nodes-toolbar"><div class="node-filters"><label class="search-field" for="node-search"><span class="sr-only">搜索节点</span><input id="node-search" type="search" name="node_search" placeholder="搜索节点、模型或地址…" autocomplete="off"></label><label for="node-status-filter"><span class="sr-only">筛选节点状态</span><select id="node-status-filter" name="node_status"><option value="all">全部状态</option><option value="enabled">已启用</option><option value="disabled">已停用</option><option value="unconfigured">未配置密钥</option></select></label></div><label class="select-all-label"><input type="checkbox" id="select-all-nodes"> 全选当前结果</label><span id="selected-node-count">已选 0 个</span></div>
-        <div id="node-list" aria-live="polite"></div>
-        <p class="field-note">更换当前节点不影响已发出的请求。后台同一时刻执行一轮检测，防止重复消耗额度。</p>
-      </section>
-      <section class="panel settings-panel admin-settings run-monitor-panel" aria-labelledby="run-monitor-title"><div class="section-heading"><span class="number">02</span><div><h2 id="run-monitor-title">检测进度与历史</h2><p>实时查看正在执行的节点，并回顾最近 48 轮检测。</p></div></div><div id="admin-stats" class="admin-stats" aria-label="最近 24 小时统计"></div><div id="admin-run-progress" class="admin-run-progress" role="status" aria-live="polite">暂无检测任务。</div><div id="admin-run-history" class="admin-run-history"></div></section>
+      <section class="panel settings-panel codex-account"><div><div class="eyebrow">CHATGPT LOGIN</div><h2>Codex 账号</h2><p id="codex-status" role="status">正在读取本机登录状态…</p><p id="codex-login-hint" role="alert" hidden></p></div><button class="button secondary" id="refresh-codex" type="button">刷新账号与模型</button></section>
       <form id="admin-form" autocomplete="off" class="admin-layout system-form">
-        <section class="panel settings-panel admin-settings"><div class="section-heading"><span class="number">03</span><div><h2>调度与系统配置</h2><p>新配置用于下一次请求，正在运行的请求不受影响。</p></div></div>
-          <div class="admin-fields"><label for="interval">检测时间间隔 <span>分钟</span></label><input id="interval" name="interval_minutes" type="number" min="1" max="1440" step="1" required><p class="field-note">支持 1–1440 分钟。修改后按新间隔重新计算下次检测时间。</p>
-          <div class="form-row"><div><label for="timeout">后台请求超时 / 秒</label><input id="timeout" name="timeout_seconds" type="number" min="10" max="600" step="1" required></div><div><label for="max-tokens">后台输出 Token 上限</label><input id="max-tokens" name="max_output_tokens" type="number" min="1024" max="64000" step="1" required></div></div>
-          <label for="retry-count">后台失败重试次数</label><input id="retry-count" name="retry_count" type="number" min="0" max="5" step="1" required><p class="field-note">默认重试 2 次，最多请求 3 次；仅重试临时请求故障，所有尝试共用本项超时预算。</p>
-          <label class="toggle-row" for="admin-enabled"><span><b>启用后台自动检测</b><small>暂停后仍可由管理员单次检测</small></span><input type="checkbox" id="admin-enabled" role="switch"><span class="switch" aria-hidden="true"></span></label>
-          <label class="toggle-row" for="guest-enabled"><span><b>开放访客独立测试</b><small>使用访客当次提交的接口和密钥</small></span><input type="checkbox" id="guest-enabled" role="switch"><span class="switch" aria-hidden="true"></span></label>
-          <div class="admin-next"><span>下次后台检测</span><strong id="admin-next">尚未启用</strong><small>北京时间 UTC+8</small></div></div>
+        <section class="panel settings-panel admin-settings quick-settings" aria-labelledby="quick-title">
+          <div class="section-heading"><span class="number" aria-hidden="true">✦</span><div><h2 id="quick-title">生成设置</h2><p>选择单个模型，或逐组运行已保存的模型组合。</p></div></div>
+          <label for="schedule-mode">生成方式</label><select id="schedule-mode"><option value="single">单个模型</option><option value="groups">循环组</option></select>
+          <div id="primary-model-settings" class="primary-model-settings">
+            <div><label for="primary-model">生成模型</label><select id="primary-model"><option value="">正在读取模型…</option></select></div>
+            <div id="primary-effort-wrap"><label for="primary-effort">思考强度</label><select id="primary-effort"><option>low</option><option>medium</option><option>high</option></select></div>
+          </div>
+          <p id="active-model-hint" class="field-note model-hint">模型列表来自当前 Codex 登录账号。</p><p id="loop-mode-hint" class="field-note model-hint" hidden>每轮依次执行下方已启用循环组中的组合，每个组合独立生成一次。修改生成方式后请保存设置。</p>
+          <div class="interval-field"><label for="interval">生成间隔</label><div><input id="interval" name="interval_minutes" type="number" min="1" max="1440" step="1" required><span>分钟</span></div><small>每张生成结束后计时，可设置 1 分钟到 24 小时</small></div>
+          <label class="toggle-row schedule-toggle" for="admin-enabled"><span><b>开启定时生成</b><small>关闭后仍可手动生成</small></span><input type="checkbox" id="admin-enabled" role="switch"><span class="switch" aria-hidden="true"></span></label>
+          <div class="admin-next"><span>下次生成</span><strong id="admin-next">尚未启用</strong><small>北京时间 UTC+8</small></div>
+          <details class="admin-advanced"><summary>高级设置<span>请求限额与访客权限</span></summary><div class="advanced-fields">
+            <div class="form-row"><div><label for="timeout">请求超时 / 秒</label><input id="timeout" name="timeout_seconds" type="number" min="10" max="1800" step="1" required></div><div><label for="max-tokens">输出 Token 上限</label><input id="max-tokens" name="max_output_tokens" type="number" min="1024" max="64000" step="1" required></div></div>
+            <label for="retry-count">失败重试次数</label><input id="retry-count" name="retry_count" type="number" min="0" max="5" step="1" required><p class="field-note">Codex 使用账号额度；API Token 上限不影响 Codex CLI。</p>
+            <label class="toggle-row" for="guest-enabled"><span><b>开放访客独立生成</b><small>访客使用自己提交的接口和密钥</small></span><input type="checkbox" id="guest-enabled" role="switch"><span class="switch" aria-hidden="true"></span></label>
+          </div></details>
+          <p class="field-note">开始测试会保存设置并立即生成；每张结束后等待设定间隔，再执行下一张（循环组也相同）。停止会取消当前任务并暂停后续测试。</p><div class="admin-actions"><div><p id="admin-message" class="form-message" role="status" aria-live="polite"></p></div><div class="action-buttons"><button class="button secondary" type="button" id="admin-stop" disabled>停止测试</button><button class="button primary" type="button" id="admin-start">开始测试</button><button class="button secondary" type="button" id="admin-run">立即生成一次</button><button class="button primary" type="submit" id="admin-save">保存设置</button></div></div>
         </section>
-        <div class="admin-actions"><div><p id="admin-message" class="form-message" role="status" aria-live="polite"></p><p class="field-note">访客凭据不保存；仅脱敏结果公开保留 1 小时。</p></div><div class="action-buttons"><button class="button secondary" type="button" id="admin-run">测试当前节点一次</button><button class="button primary" type="submit" id="admin-save">保存系统配置</button></div></div>
       </form>
+      <details class="panel advanced-console" open><summary><span>循环组设置</span><small>每行绑定一个模型与思考强度，按组独立保存</small></summary><div class="advanced-console-body">
+        <section class="settings-panel admin-settings combo-panel" aria-labelledby="combo-title">
+          <div class="section-heading"><span class="number">01</span><div><h2 id="combo-title">循环组</h2><p>每行选择一个模型和对应强度。同一组合可分别保存在不同组中，按行顺序运行。</p></div></div>
+          <div id="loop-group-list" class="loop-group-list"></div>
+          <form id="loop-group-form" class="loop-group-editor">
+            <div class="nodes-heading"><h3 id="group-editor-title">新建循环组</h3><button class="button secondary" type="button" id="new-loop-group">新建组</button></div>
+            <label for="loop-group-name">组名称</label><input id="loop-group-name" maxlength="60" required placeholder="例如：快速模型对比">
+            <div id="group-pair-list" aria-label="模型与思考强度组合"></div>
+            <button class="button secondary" type="button" id="add-group-pair">＋ 添加组合</button>
+            <label class="toggle-row" for="loop-group-enabled"><span><b>启用此组</b><small>选择循环组模式并开启定时生成后运行</small></span><input type="checkbox" id="loop-group-enabled" role="switch" checked><span class="switch" aria-hidden="true"></span></label>
+            <div class="combo-actions"><p id="group-selection-summary" class="field-note" role="status"></p><button class="button primary" type="submit" id="save-loop-group">保存循环组</button></div>
+            <p id="group-result" class="form-message" role="status" aria-live="polite"></p>
+          </form>
+        </section>
+        <section class="settings-panel admin-settings nodes-panel" aria-labelledby="nodes-title" hidden>
+          <div class="nodes-heading"><div class="section-heading"><span class="number">02</span><div><h2 id="nodes-title">模型节点</h2><p>已启用的组合按节点顺序轮流运行，同一时间只执行一个。</p></div></div><div class="action-buttons"><button class="button secondary" type="button" id="bulk-run" disabled>生成所选节点</button><button class="button primary" type="button" id="add-node">＋ 新增节点</button></div></div>
+          <div class="nodes-toolbar"><div class="node-filters"><label class="search-field" for="node-search"><span class="sr-only">搜索节点</span><input id="node-search" type="search" name="node_search" placeholder="搜索节点、模型或地址…" autocomplete="off"></label><label for="node-status-filter"><span class="sr-only">筛选节点状态</span><select id="node-status-filter" name="node_status"><option value="all">全部状态</option><option value="enabled">已启用</option><option value="disabled">已停用</option><option value="unconfigured">未配置凭据</option></select></label></div><label class="select-all-label"><input type="checkbox" id="select-all-nodes"> 全选当前结果</label><span id="selected-node-count">已选 0 个</span></div>
+          <div id="node-list" aria-live="polite"></div><p class="field-note">同一时间只执行一轮，避免重复消耗额度。</p>
+        </section>
+
+      </div></details>
+
+      <section id="run-records" class="panel records-panel" aria-labelledby="run-monitor-title">
+        <div class="records-heading"><div><div class="eyebrow">GENERATION HISTORY</div><h2 id="run-monitor-title">生成记录</h2><p>按账号、模型和循环组查找作品，查看请求结果并批量管理。</p></div><button id="history-refresh" class="button secondary" type="button">刷新记录</button></div>
+        <p class="record-account-note">新记录标记请求开始时的 Codex 账号指纹。旧记录显示“账号未记录”；API 节点不对应 ChatGPT 账号。删除作品后仍保留最少的时间与结果用于统计，成功率按请求成功 ÷（成功＋失败）计算；手动取消不计入。迁移前已删除且没有备份的请求无法追溯。</p>
+        <div class="records-stats-heading">最近 24 小时 · 站点已追踪请求（含已删除作品）</div><div id="admin-stats" class="admin-stats" aria-label="最近 24 小时统计"></div>
+        <div id="admin-run-progress" class="admin-run-progress" role="status" aria-live="polite">暂无测试任务。</div>
+        <div class="history-filters">
+          <label class="history-search">搜索记录<input id="history-search" type="search" maxlength="160" placeholder="编号、模型、循环组、账号标记" autocomplete="off"></label>
+          <label>请求状态<select id="history-status"><option value="all">全部状态</option><option value="success">请求成功</option><option value="error">请求失败</option><option value="cancelled">手动取消</option><option value="running">生成中</option></select></label>
+          <label>生成账号<select id="history-account"><option value="all">全部账号 / 接入方式</option><option value="unknown">账号未记录</option><option value="api">API 节点</option></select></label>
+          <label>生成模型<select id="history-model"><option value="all">全部模型</option></select></label>
+          <label>循环组<select id="history-group"><option value="all">全部循环组</option><option value="single">单个模型 / 历史记录</option></select></label>
+          <label>时间范围<select id="history-period"><option value="all">全部时间</option><option value="24h">最近 24 小时</option><option value="7d">最近 7 天</option></select></label>
+        </div>
+        <div class="history-toolbar"><label><input id="history-select-page" type="checkbox">全选本页</label><button id="history-select-all" class="button secondary" type="button">全选筛选结果</button><span id="history-selection" role="status">已选 0 项</span><button id="history-clear" class="button secondary" type="button" disabled>清空选择</button><button id="history-delete" class="button secondary delete-art-button" type="button" disabled>删除所选</button></div>
+        <p id="history-message" class="form-message" role="status" aria-live="polite"></p>
+        <div id="admin-run-history" class="admin-run-history"></div>
+        <nav class="gallery-pagination" aria-label="后台记录分页"><button id="history-previous" class="button secondary" type="button" disabled>上一页</button><span id="history-page" role="status">第 1 / 1 页</span><button id="history-next" class="button secondary" type="button" disabled>下一页</button></nav>
+      </section>
+      <section class="panel database-panel" aria-labelledby="database-title">
+        <div><div class="eyebrow">DATABASE</div><h2 id="database-title">初始化数据库</h2><p>清空当前实例的作品、原始输出、访客结果和全部请求统计，并暂停定时测试。管理员密码、登录状态、节点及循环组设置保留。</p><p id="database-message" class="form-message" role="status" aria-live="polite"></p></div>
+        <button id="database-reset" class="button secondary delete-art-button" type="button">初始化生成数据</button>
+      </section>
     </div>
     <footer><span>后台配置修改仅对站点任务生效，访客测试独立执行。</span><span class="footer-source"><a href="https://github.com/fishxcode/pelecanus" target="_blank" rel="noopener noreferrer">GitHub 源码 ↗</a><span class="footer-divider">/</span><span>Commit <code>__GIT_COMMIT__</code></span></span><a href="/">查看公开观察站 ↗</a></footer>
   </main>
   <dialog id="node-dialog" aria-labelledby="node-title"><form id="node-form" autocomplete="off">
     <div class="eyebrow">MODEL NODE</div><h2 id="node-title">新增节点</h2>
     <label for="node-name">节点名称</label><input id="node-name" required maxlength="60" placeholder="例如：主线路、备用线路">
-          <div class="saved-settings"><div><span>已保存的 API 地址</span><strong id="saved-url">****</strong></div><div><span>已保存的 API Key</span><strong id="saved-key">尚未配置</strong></div></div>
+          <div id="api-credentials"><div class="saved-settings"><div><span>已保存的 API 地址</span><strong id="saved-url">****</strong></div><div><span>已保存的 API Key</span><strong id="saved-key">尚未配置</strong></div></div>
           <label for="admin-url">更换 API 地址</label><input id="admin-url" type="text" placeholder="留空保留当前地址" maxlength="2048" autocomplete="off" spellcheck="false" data-secret>
           <label for="admin-key">更换 API Key</label><input id="admin-key" type="text" placeholder="留空保留当前密钥" maxlength="4096" autocomplete="off" spellcheck="false" data-secret><p class="field-note">更换地址时需同时填写该地址的密钥。保存后不会返回完整地址或密钥。</p>
-          <label for="admin-model">模型名称</label><input id="admin-model" required maxlength="120" autocomplete="off">
-          <div class="form-row"><div><label for="admin-effort">思考强度</label><select id="admin-effort"><option>low</option><option>medium</option><option>high</option><option>xhigh</option></select></div><div><label for="admin-protocol">接口协议</label><select id="admin-protocol"><option value="responses">Responses</option><option value="chat">Chat Completions</option></select></div></div>
+          </div><p id="codex-node-note" class="field-note" hidden>复用本机 ChatGPT 登录，无需 API 地址或 Key。可复制节点，分别选择模型或思考强度。</p><label id="codex-model-label" for="codex-model-select" hidden>账号可用模型</label><select id="codex-model-select" hidden><option value="">手动填写模型名称</option></select><label for="admin-model">模型名称</label><input id="admin-model" required maxlength="120" autocomplete="off">
+          <div class="form-row"><div><label for="admin-effort">思考强度</label><select id="admin-effort"><option>low</option><option>medium</option><option>high</option><option>xhigh</option><option>max</option><option>ultra</option></select></div><div><label for="admin-protocol">接入方式</label><select id="admin-protocol"><option value="codex">Codex · ChatGPT 登录</option><option value="responses">Responses</option><option value="chat">Chat Completions</option></select></div></div>
     <p id="node-message" class="form-message" role="status"></p>
     <div class="action-buttons"><button class="button secondary" type="button" id="node-cancel">取消</button><button class="button primary" type="submit" id="node-save">保存节点</button></div>
   </form></dialog>

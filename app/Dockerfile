@@ -1,9 +1,8 @@
 FROM python:3.13-slim
 WORKDIR /app
-ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt && python -m playwright install --with-deps chromium && chmod -R a+rX /opt/playwright
-COPY server.py visual_review.py render_frames.py ./
+RUN pip install --no-cache-dir -r requirements.txt
+COPY server.py codex_runner.py local_runtime.py ./
 COPY web ./web
 RUN useradd --system --uid 10001 monitor && mkdir /data && chown monitor:monitor /data
 USER monitor
