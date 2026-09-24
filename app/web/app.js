@@ -2,9 +2,9 @@ const $ = (id) => document.getElementById(id);
 const labels = {success:'请求成功', error:'请求失败', cancelled:'手动取消', queued:'排队中', running:'生成中'};
 const escapeHTML = (value) => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const date = (seconds, full = false) => seconds ? new Intl.DateTimeFormat('zh-CN', {timeZone:'Asia/Shanghai', ...(full ? {year:'numeric'} : {}), month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(seconds * 1000)) : '—';
-let state, records = [], galleryPage = 1, galleryPages = 1, galleryTotal = 0, polling = false, guestBusy = false, deleteBusy = false, selectionBusy = false, testingBusy = false, adminAuthenticated = false, pendingDeleteIds = [], clockOffset = 0, detailSequence = 0, latestDisplayedRun = null;
+let state, records = [], galleryPage = 1, galleryPages = 1, galleryTotal = 0, polling = false, guestBusy = false, deleteBusy = false, selectionBusy = false, testingBusy = false, adminAuthenticated = false, pendingDeleteIds = [], detailSequence = 0, latestDisplayedRun = null;
 
-function elapsedSeconds(run, now = Date.now() / 1000 + clockOffset) {
+function elapsedSeconds(run, now = PelicanLive.now()) {
   const started = Number(run?.started);
   if (!Number.isFinite(started)) return null;
   const finished = Number(run?.finished);
@@ -12,10 +12,10 @@ function elapsedSeconds(run, now = Date.now() / 1000 + clockOffset) {
   return end === null ? null : Math.max(0, end - started);
 }
 
-function formatDuration(run, now = Date.now() / 1000 + clockOffset) {
+function formatDuration(run, now = PelicanLive.now()) {
   if (!run || run.status === 'queued') return '排队中';
   const seconds = elapsedSeconds(run, now);
-  if (seconds === null) return '耗时 —';
+  if (seconds === null) return run.status === 'running' ? '耗时待同步' : '耗时 —';
   const prefix = run.status === 'running' ? '已耗时 ' : '耗时 ';
   if (seconds < 1) return `${prefix}小于 1 秒`;
   if (seconds < 60) return `${prefix}${seconds.toFixed(1)} 秒`;
@@ -58,24 +58,26 @@ async function toggleFavorite(id, favorite) {
 }
 
 async function api(path, body) {
-  const response = await fetch(path, {method:body === undefined ? 'GET' : 'POST', headers:{...(body === undefined ? {} : {'Content-Type':'application/json'})}, ...(body === undefined ? {} : {body:JSON.stringify(body)})});
+  const response = await fetch(path, {cache:'no-store', method:body === undefined ? 'GET' : 'POST', headers:{...(body === undefined ? {} : {'Content-Type':'application/json'})}, ...(body === undefined ? {} : {body:JSON.stringify(body)})});
   if (!response.ok) {
     const data = await response.json().catch(() => ({error:`服务返回异常响应（HTTP ${response.status}），请稍后重试`}));
     const error = new Error(data.error || `请求失败：${response.status}`);
     error.status = response.status;
     throw error;
   }
+  if (body !== undefined) PelicanLive.invalidate();
   return path.endsWith('/svg') ? response.blob() : response.json();
 }
 
 async function deleteApi(path, body) {
-  const response = await fetch(path, {credentials:'same-origin', method:body === undefined ? 'GET' : 'POST', headers:body === undefined ? {} : {'Content-Type':'application/json'}, ...(body === undefined ? {} : {body:JSON.stringify(body)})});
+  const response = await fetch(path, {cache:'no-store', credentials:'same-origin', method:body === undefined ? 'GET' : 'POST', headers:body === undefined ? {} : {'Content-Type':'application/json'}, ...(body === undefined ? {} : {body:JSON.stringify(body)})});
   const data = await response.json().catch(() => ({error:`服务返回异常响应（HTTP ${response.status}），请稍后重试`}));
   if (!response.ok) {
     const error = new Error(data.error || `请求失败：${response.status}`);
     error.status = response.status;
     throw error;
   }
+  if (body !== undefined) PelicanLive.invalidate();
   return data;
 }
 function cleanRunIds(ids) {
@@ -247,19 +249,22 @@ function badge(status) { return `<span class="badge ${escapeHTML(status)}">${esc
 function renderTestingControls() {
   const active = state?.settings.enabled || state?.running || state?.queued_nodes?.length;
   $('gallery-testing-controls').hidden = !adminAuthenticated;
-  $('gallery-start').disabled = testingBusy || !state || Boolean(active) || state.stopping;
-  $('gallery-stop').disabled = testingBusy || !state || (!active && !state.stopping);
-  $('gallery-test-state').textContent = state?.stopping ? '正在停止…' : state?.running ? '测试进行中' : state?.settings.enabled ? '测试已开始，等待下一轮' : '测试已停止';
+  const offline = !PelicanLive.fresh();
+  $('gallery-start').disabled = offline || testingBusy || !state || Boolean(active) || state.stopping;
+  $('gallery-stop').disabled = offline || testingBusy || !state || (!active && !state.stopping);
+  $('gallery-once').disabled = offline || testingBusy || !state || Boolean(active) || state.stopping;
+  const running = state?.timeline.find(run => run.id === state.running);
+  $('gallery-test-state').textContent = offline ? '服务未连接，状态待确认' : state?.stopping ? '正在暂停…' : running ? `正在生成 #${running.id} · ${formatDuration(running)}` : state?.settings.enabled ? '循环已开启，等待下一轮' : '生成已暂停';
 }
 
 async function controlTesting(operation) {
   if (testingBusy) return;
   testingBusy = true; renderTestingControls();
   try {
-    await deleteApi(`/api/admin/testing/${operation}`, {});
+    const result = await deleteApi(operation === 'once' ? '/api/admin/run' : `/api/admin/testing/${operation}`, {});
     while (polling) await new Promise(resolve => setTimeout(resolve, 50));
     await refresh();
-    operationMessage(operation === 'start' ? '已按保存的模型 / 循环组设置开始测试。' : '已停止测试，当前任务已取消，排队和定时任务已暂停。');
+    operationMessage(operation === 'once' ? `已提交单次生成 #${result.id}，完成后停止。` : operation === 'start' ? '已按保存的模型 / 循环组设置开始循环生成。' : '已暂停生成，当前任务已取消，后续任务已暂停。');
   } catch (error) {
     if (error.status === 401) { adminAuthenticated = false; renderAuthState(); }
     operationMessage(error.message, true);
@@ -291,13 +296,13 @@ function renderState() {
   $('last-run').textContent = latest ? date(latest.started) : '尚无记录';
   $('last-duration').textContent = latest ? formatDuration(latest) : '尚无记录';
   $('next-run').textContent = config.enabled ? (config.next_run == null ? '生成结束后计时' : date(config.next_run)) : '尚未启用';
-  $('schedule-note').textContent = config.enabled ? `每张生成结束后等待 ${config.interval_minutes} 分钟` : '站点自动生成已暂停';
+  $('schedule-note').textContent = config.enabled ? `每张生成结束后等待 ${PelicanLive.interval(config.interval_seconds)}` : '站点自动生成已暂停';
   const queued = state.queued_nodes || [];
   const queueStatus = $('queue-status');
   queueStatus.hidden = !queued.length;
   queueStatus.textContent = queued.length ? `排队中的节点（${queued.length}）：${queued.map(name => escapeHTML(name)).join('、')} · 将依次生成一张图` : '';
-  $('frequency').textContent = `结束后等 ${config.interval_minutes} 分钟 / ${grouped ? '逐组逐个生成' : '每次一张'}`;
-  $('footer-frequency').textContent = `每 15 秒同步记录 · 每张结束后间隔 ${config.interval_minutes} 分钟`;
+  $('frequency').textContent = `结束后等 ${PelicanLive.interval(config.interval_seconds)} / ${grouped ? '逐组逐个生成' : '每次一张'}`;
+  $('footer-frequency').textContent = `每秒同步状态 · 每张结束后间隔 ${PelicanLive.interval(config.interval_seconds)}`;
   $('guest-panel').hidden = !config.guest_enabled;
   $('run').disabled = guestBusy || !config.guest_enabled;
   if (!guestBusy) $('run').innerHTML = config.guest_enabled ? '<span aria-hidden="true">▷</span> 生成一个鹈鹕动画' : '访客生成暂未开放';
@@ -307,13 +312,14 @@ function renderState() {
 }
 
 function updateClock() {
+  if (!PelicanLive.fresh()) { $('countdown').textContent = '待同步'; return; }
   if (latestDisplayedRun && $('last-duration')) $('last-duration').textContent = formatDuration(latestDisplayedRun);
   if (!state?.settings.enabled) { $('countdown').textContent = '— : —'; return; }
   if (state.running || state.stopping || state.settings.next_run == null) {
     $('countdown').textContent = state.stopping ? '停止中' : '生成中';
     return;
   }
-  const left = Math.max(0, Math.ceil(state.settings.next_run - (Date.now() / 1000 + clockOffset)));
+  const left = Math.max(0, Math.ceil(state.settings.next_run - state.server_time));
   $('countdown').textContent = left ? `${String(Math.floor(left / 60)).padStart(2,'0')} : ${String(left % 60).padStart(2,'0')}` : state.running ? '生成中' : '即将开始';
 }
 
@@ -380,7 +386,7 @@ function renderGallery() {
       : r.has_svg
       ? `<img data-image="${r.id}" alt="模型生成的鹈鹕骑行 SVG" loading="lazy">`
       : `<span class="no-preview ${escapeHTML(r.status)}"><b aria-hidden="true">${r.status === 'running' ? '◌' : '↯'}</b>${r.status === 'running' ? '模型正在创作' : '暂无可预览的动画'}</span>`;
-    return heading + `<article class="run-card"><label class="run-select"><input type="checkbox" data-select-run="${r.id}" aria-label="选择作品 #${r.id}" ${selectedRuns.has(r.id) ? 'checked' : ''} ${!selectableRun(r) ? 'disabled' : ''}> 选择 #${r.id}</label><button class="preview" data-run="${r.id}" aria-label="${escapeHTML(date(r.started) + '，查看生成结果')}">${preview}<span class="overlay">查看结果 ↗</span></button><div class="card-body"><div class="card-top"><time>${date(r.started)}</time>${badge(r.status)}</div><p>${r.group_name ? '循环组：' : '单个：'}${escapeHTML(r.group_name || r.node_name || '历史记录')}</p>${adminAuthenticated ? `<p class="record-account">${escapeHTML(r.account_label || (r.protocol === 'codex' ? '账号未记录' : 'API 节点'))}</p>` : ''}<p class="card-model">${escapeHTML(r.model)} · ${escapeHTML(r.effort)} · ${formatDuration(r)}</p><p>${r.source === 'manual' ? '手动生成' : r.source === 'retry' ? '失败重试' : '定时生成'} · 鹈鹕骑行动画</p><div class="card-actions">${svgDownload(r)}${favoriteButton(r)}<button class="button secondary delete-run" type="button" data-delete-run="${r.id}" ${!selectableRun(r) ? 'disabled' : ''}>${r.favorite ? '已收藏 · 不可删除' : '删除作品和记录'}</button></div></div></article>`;
+    return heading + `<article class="run-card"><label class="run-select"><input type="checkbox" data-select-run="${r.id}" aria-label="选择作品 #${r.id}" ${selectedRuns.has(r.id) ? 'checked' : ''} ${!selectableRun(r) ? 'disabled' : ''}> 选择 #${r.id}</label><button class="preview" data-run="${r.id}" aria-label="${escapeHTML(date(r.started) + '，查看生成结果')}">${preview}<span class="overlay">查看结果 ↗</span></button><div class="card-body"><div class="card-top"><time>${date(r.started)}</time>${badge(r.status)}</div><p>${r.group_name ? '循环组：' : '单个：'}${escapeHTML(r.group_name || r.node_name || '历史记录')}</p>${adminAuthenticated ? `<p class="record-account">${escapeHTML(r.account_label || (r.protocol === 'codex' ? '账号未记录' : 'API 节点'))}</p>` : ''}<p class="card-model">${escapeHTML(r.model)} · ${escapeHTML(r.effort)} · <span data-live-duration="${r.id}">${formatDuration(r)}</span></p><p>${r.source === 'manual' ? '手动生成' : r.source === 'retry' ? '失败重试' : '定时生成'} · 鹈鹕骑行动画</p><div class="card-actions">${svgDownload(r)}${favoriteButton(r)}<button class="button secondary delete-run" type="button" data-delete-run="${r.id}" ${!selectableRun(r) ? 'disabled' : ''}>${r.favorite ? '已收藏 · 不可删除' : '删除作品和记录'}</button></div></div></article>`;
   }).join('');
   $('gallery').querySelectorAll('[data-run]').forEach(button => button.addEventListener('click', () => showDetail(Number(button.dataset.run))));
   $('gallery').querySelectorAll('[data-delete-run]').forEach(button => button.addEventListener('click', event => { event.stopPropagation(); askDelete(Number(button.dataset.deleteRun)); }));
@@ -399,7 +405,7 @@ async function showDetail(id) {
     const r = await api(`/api/runs/${id}`);
     if (sequence !== detailSequence) return;
     $('detail-title').textContent = `鹈鹕动画 · ${date(r.started)}`;
-    $('detail-body').innerHTML = `${r.has_html ? `<div class="html-preview detail-html"><iframe data-fit-preview src="/api/runs/${r.id}/html?preview=1" sandbox="allow-scripts" title="模型生成的 HTML 动画"></iframe></div>` : r.has_svg ? '<img class="detail-image" id="detail-image" alt="模型生成的鹈鹕骑行 SVG 动画">' : ''}<div class="detail-meta">${badge(r.status)}<span>${r.group_name ? '循环组：' : '单个：'}${escapeHTML(r.group_name || r.node_name || '历史记录')}</span><span>${escapeHTML(r.model)} / ${escapeHTML(r.effort)}</span><span>${r.protocol === 'codex' ? '本机 Codex' : r.protocol === 'responses' ? 'Responses' : 'Chat Completions'}</span>${adminAuthenticated ? `<span>${escapeHTML(r.account_label || (r.protocol === 'codex' ? '账号未记录' : 'API 节点'))}</span>` : ''}<span>${formatDuration(r)}</span><span>${r.source === 'manual' ? '手动生成' : r.source === 'retry' ? '失败重试' : '定时生成'} #${r.id}</span></div>${r.error ? `<p class="detail-error">${escapeHTML(r.error)}</p>` : ''}<details open><summary>原始输出</summary><pre>${escapeHTML(r.output || '请求尚未返回内容')}</pre></details><details><summary>本轮固定提示词</summary><pre>${escapeHTML(r.prompt || '')}</pre></details><details><summary>请求信息与用量</summary><pre>${escapeHTML(JSON.stringify({api:r.base_url,requested_model:r.model,returned_model:r.returned_model,effort:r.effort,protocol:r.protocol,usage:r.usage},null,2))}</pre></details><div class="detail-actions">${r.has_html ? `<a class="button secondary" href="/api/runs/${r.id}/html" target="_blank" rel="noopener">打开原尺寸 HTML ↗</a>` : ''}${r.has_html ? `<a class="button secondary" href="/api/runs/${r.id}/html" download="${escapeHTML((r.filename || 'pelican.svg').replace(/\.svg$/, '.html'))}">下载 HTML ↓</a>` : ''}${svgDownload(r)}${favoriteButton(r)}<button class="button delete-run" id="delete-detail" type="button" ${!selectableRun(r) ? 'disabled' : ''}>${r.favorite ? '已收藏 · 不可删除' : '删除作品和记录'}</button></div>${r.has_svg ? '<p class="field-note">下载的 SVG 如含脚本动画，请用浏览器单独打开；作为普通图片预览时可能不播放动画。</p>' : ''}`;
+    $('detail-body').innerHTML = `${r.has_html ? `<div class="html-preview detail-html"><iframe data-fit-preview src="/api/runs/${r.id}/html?preview=1" sandbox="allow-scripts" title="模型生成的 HTML 动画"></iframe></div>` : r.has_svg ? '<img class="detail-image" id="detail-image" alt="模型生成的鹈鹕骑行 SVG 动画">' : ''}<div class="detail-meta">${badge(r.status)}<span>${r.group_name ? '循环组：' : '单个：'}${escapeHTML(r.group_name || r.node_name || '历史记录')}</span><span>${escapeHTML(r.model)} / ${escapeHTML(r.effort)}</span><span>${r.protocol === 'codex' ? '本机 Codex' : r.protocol === 'responses' ? 'Responses' : 'Chat Completions'}</span>${adminAuthenticated ? `<span>${escapeHTML(r.account_label || (r.protocol === 'codex' ? '账号未记录' : 'API 节点'))}</span>` : ''}<span data-live-duration="${r.id}">${formatDuration(r)}</span><span>${r.source === 'manual' ? '手动生成' : r.source === 'retry' ? '失败重试' : '定时生成'} #${r.id}</span></div>${r.error ? `<p class="detail-error">${escapeHTML(r.error)}</p>` : ''}<details open><summary>原始输出</summary><pre>${escapeHTML(r.output || '请求尚未返回内容')}</pre></details><details><summary>本轮实际提示词</summary><pre>${escapeHTML(r.prompt || '')}</pre></details><details><summary>请求信息与用量</summary><pre>${escapeHTML(JSON.stringify({api:r.base_url,requested_model:r.model,returned_model:r.returned_model,effort:r.effort,protocol:r.protocol,usage:r.usage},null,2))}</pre></details><div class="detail-actions">${r.has_html ? `<a class="button secondary" href="/api/runs/${r.id}/html" target="_blank" rel="noopener">打开原尺寸 HTML ↗</a>` : ''}${r.has_html ? `<a class="button secondary" href="/api/runs/${r.id}/html" download="${escapeHTML((r.filename || 'pelican.svg').replace(/\.svg$/, '.html'))}">下载 HTML ↓</a>` : ''}${svgDownload(r)}${favoriteButton(r)}<button class="button delete-run" id="delete-detail" type="button" ${!selectableRun(r) ? 'disabled' : ''}>${r.favorite ? '已收藏 · 不可删除' : '删除作品和记录'}</button></div>${r.has_svg ? '<p class="field-note">下载的 SVG 如含脚本动画，请用浏览器单独打开；作为普通图片预览时可能不播放动画。</p>' : ''}`;
     $('delete-detail').addEventListener('click', () => askDelete(id));
     if ($('detail-image')) attachImage($('detail-image'), id);
     $('detail-body').querySelector('[data-favorite-run]')?.addEventListener('click', () => toggleFavorite(id, !r.favorite));
@@ -419,15 +425,12 @@ async function refresh(page = galleryPage) {
     const query = galleryQuery(page);
     const [newState, fresh, guests] = await Promise.all([api('/api/state'), api(`/api/runs?${query}`), api('/api/guest/results')]);
     renderGuestResults(guests);
-    state = newState;
-    clockOffset = state.server_time - Date.now()/1000;
+    acceptServerState(newState);
     galleryPage = fresh.page; galleryPages = fresh.pages; galleryTotal = fresh.total;
     records = fresh.items;
     if (!Array.isArray(fresh.accounts)) { adminAuthenticated = false; renderAuthState(); }
     renderAccountFilter(fresh.accounts);
     renderState(); renderGallery();
-    $('connection').textContent = state.running ? '模型生成进行中' : state.settings.enabled ? '自动生成已启用' : '自动生成已暂停';
-    $('connection').className = 'connection online';
   } catch (error) {
     if (error.status === 401) {
       adminAuthenticated = false;
@@ -542,6 +545,7 @@ $('select-all-runs').addEventListener('click', async () => {
 });
 $('gallery-start').addEventListener('click', () => controlTesting('start'));
 $('gallery-stop').addEventListener('click', () => controlTesting('stop'));
+$('gallery-once').addEventListener('click', () => controlTesting('once'));
 $('delete-login-link').addEventListener('click', () => {
   try { sessionStorage.setItem(pendingDeleteKey, JSON.stringify({ids:pendingDeleteIds, account:pendingDeleteAccount, at:Date.now()})); }
   catch { operationMessage('浏览器未允许保留选择，请登录后重新选择。', true); }
@@ -556,3 +560,41 @@ $('gallery-logout').addEventListener('click', async () => {
   } catch (error) { operationMessage(error.message, true); }
 });
 window.addEventListener('focus', () => { refresh(); });
+
+let liveRecordSignature = '';
+function acceptServerState(value) {
+  if (state && value.server_time < state.server_time) return;
+  state = value;
+  if (adminAuthenticated !== value.authenticated) {
+    adminAuthenticated = Boolean(value.authenticated);
+    renderAuthState();
+  }
+  renderState();
+  for (const element of document.querySelectorAll('[data-live-duration]')) {
+    const id = Number(element.dataset.liveDuration);
+    const run = value.timeline.find(run => run.id === id) || records.find(run => run.id === id);
+    if (run) element.textContent = formatDuration(run, value.server_time);
+  }
+}
+PelicanLive.start(value => {
+  acceptServerState(value);
+  $('connection').textContent = '已连接 · 每秒从服务端同步状态';
+  $('connection').className = 'connection online';
+  const signature = JSON.stringify([value.authenticated, value.settings, value.timeline.map(run => [run.id,run.status,run.finished,run.favorite])]);
+  if (signature !== liveRecordSignature && !polling) {
+    liveRecordSignature = signature;
+    void refresh();
+  }
+}, () => {
+  $('connection').textContent = '服务连接中断 · 状态待确认';
+  $('connection').className = 'connection offline';
+  renderTestingControls(); updateClock();
+  $('next-run').textContent = '待同步';
+  if (latestDisplayedRun?.status === 'running') {
+    $('last-duration').textContent = '耗时待同步';
+    $('model-status').textContent = '状态待同步';
+  }
+  document.querySelectorAll('[data-live-duration]').forEach(element => {
+    if (state?.timeline.find(run => run.id === Number(element.dataset.liveDuration))?.status === 'running') element.textContent = '耗时待同步';
+  });
+});

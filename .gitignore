@@ -26,6 +26,7 @@
 !/app/web/index.html
 !/app/web/admin.html
 !/app/web/app.js
+!/app/web/live.js
 !/app/web/admin.js
 !/app/web/privacy.js
 !/app/web/previews.js

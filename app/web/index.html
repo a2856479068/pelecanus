@@ -4,12 +4,12 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#f5f7f7"><meta name="description" content="用一只骑自行车的鹈鹕，持续观察你的模型输出。">
   <title>鹈鹕观察站 · Pelican Watch</title>
-  <link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/style.css"><script defer src="/privacy.js"></script><script defer src="/previews.js"></script><script defer src="/app.js"></script>
+  <link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/style.css"><script defer src="/privacy.js"></script><script defer src="/previews.js"></script><script defer src="/live.js"></script><script defer src="/app.js"></script>
 </head>
 <body class="observatory">
   <nav class="topbar" aria-label="主导航"><a class="brand" href="/"><img src="/favicon.svg" alt="" width="30" height="30">鹈鹕观察站 <span>PELICAN WATCH</span></a><div class="action-buttons"><span class="connection" id="connection">连接检测服务中</span><a class="button secondary" href="/admin">后台管理</a><button class="button secondary" id="gallery-logout" hidden>退出登录</button></div></nav>
   <main>
-    <header class="page-head"><div><div class="eyebrow">MODEL OBSERVATORY <span>/ 01</span></div><h1>让模型，画只鹈鹕<span class="accent">。</span></h1><p>用固定提示词、全新会话，每次生成一个鹈鹕 HTML 动画。</p></div><button id="refresh" class="button secondary"><span aria-hidden="true">↻</span> 刷新记录</button></header>
+    <header class="page-head"><div><div class="eyebrow">MODEL OBSERVATORY <span>/ 01</span></div><h1>让模型，画只鹈鹕<span class="accent">。</span></h1><p>用已保存提示词、全新会话，每次生成一个鹈鹕 HTML 动画。</p></div><button id="refresh" class="button secondary"><span aria-hidden="true">↻</span> 刷新记录</button></header>
     <p id="operation-message" class="operation-message" role="status" aria-live="polite"></p>
     <div class="layout">
       <div class="content">
@@ -26,7 +26,7 @@
           <div class="timeline" id="timeline" role="group" aria-label="最近24小时检测时间线"></div>
           <div class="timeline-axis"><span>24 小时前</span><span id="timeline-interval"></span><span>现在</span></div>
           <div class="legend"><span><i class="success"></i>请求成功</span><span><i class="error"></i>请求失败</span><span><i class="cancelled"></i>手动取消</span><span><i class="running"></i>生成中</span><span><i class="empty"></i>无记录</span></div>
-          <div class="schedule-row"><div><span>生成间隔</span><b id="frequency">30 分钟 / 每次一张鹈鹕 SVG</b></div><div><span>最近生成</span><b id="last-run">尚无记录</b></div><div><span>最近耗时</span><b id="last-duration">尚无记录</b></div><div><span>下次生成</span><b id="next-run">尚未启用</b></div><span class="timezone">北京时间 UTC+8</span></div><div id="queue-status" class="queue-status" role="status" aria-live="polite" hidden></div>
+          <div class="schedule-row"><div><span>生成间隔</span><b id="frequency">等待服务端状态</b></div><div><span>最近生成</span><b id="last-run">待同步</b></div><div><span>最近耗时</span><b id="last-duration">待同步</b></div><div><span>下次生成</span><b id="next-run">待同步</b></div><span class="timezone">北京时间 UTC+8</span></div><div id="queue-status" class="queue-status" role="status" aria-live="polite" hidden></div>
         </section>
 
         <section class="gallery-section" aria-labelledby="gallery-title">
@@ -40,7 +40,7 @@
         </section>
       </div>
 
-      <aside><section class="panel settings-panel"><div class="eyebrow">CODEX LOCAL</div><h2>让你的模型出发</h2><p class="intro">选择模型与思考强度，手动生成或按间隔轮流创作，所有作品自动进入画廊。</p><a class="button primary full" href="/admin">进入管理后台 ↗</a><div id="gallery-testing-controls" class="testing-controls" hidden><p id="gallery-test-state" role="status"></p><button class="button primary" id="gallery-start" type="button">开始测试</button><button class="button secondary" id="gallery-stop" type="button">停止测试</button><p class="field-note">按已保存的模型或循环组运行；停止会取消当前任务并暂停后续测试。</p></div><p class="field-note">自动生成默认关闭。使用 ChatGPT 账号的 Codex 额度。</p></section>
+      <aside><section class="panel settings-panel"><div class="eyebrow">CODEX LOCAL</div><h2>让你的模型出发</h2><p class="intro">选择模型与思考强度，手动生成或按间隔轮流创作，所有作品自动进入画廊。</p><a class="button primary full" href="/admin">进入管理后台 ↗</a><div id="gallery-testing-controls" class="testing-controls" hidden><p id="gallery-test-state" role="status"></p><button class="button primary" id="gallery-start" type="button">开始循环</button><button class="button secondary" id="gallery-stop" type="button">暂停生成</button><button class="button secondary" id="gallery-once" type="button">生成一次</button><p class="field-note">按已保存的模型或循环组运行；停止会取消当前任务并暂停后续测试。</p></div><p class="field-note">自动生成默认关闭。使用 ChatGPT 账号的 Codex 额度。</p></section>
         <section id="guest-panel" class="panel settings-panel" aria-labelledby="settings-title" hidden><div class="eyebrow">GUEST TEST</div><h2 id="settings-title">为你的模型生成</h2><p class="intro">使用自己的接口独立生成一个鹈鹕动画，与本站后台任务分开。</p>
           <form id="guest-form" autocomplete="off">
             <label for="base-url">API 地址</label><input id="base-url" type="text" placeholder="example.com 或 https://example.com/v1" required autocomplete="off" maxlength="2048" spellcheck="false" data-secret>
@@ -55,10 +55,10 @@
           <div class="request-note"><i class="dot"></i><span>每次请求使用独立会话，只生成一张图<br>结果与脱敏 API 公开 · 密钥不公开</span></div>
           <section class="guest-results" aria-labelledby="guest-results-title"><h3 id="guest-results-title">访客生成结果 <span id="guest-count">0</span></h3><p id="guest-empty" class="field-note">暂无访客生成结果</p><div id="guest-results" aria-live="polite" tabindex="0" aria-label="最近访客生成结果"></div></section>
         </section>
-        <section class="method"><div class="eyebrow">HOW IT WORKS</div><h3>每次只画一只鹈鹕</h3><p>任务使用固定提示词，每次从独立新会话开始，生成一个用 SVG 绘制动画的 HTML。</p><ol><li><span>01</span> 每次请求都开启全新会话</li><li><span>02</span> 所有请求使用同一条鹈鹕提示词</li><li><span>03</span> 每个任务只生成一个 HTML 动画</li><li><span>04</span> 状态只记录请求成功或失败</li></ol><details><summary>查看固定提示词 <span aria-hidden="true">↗</span></summary><pre id="task-prompt">正在读取提示词…</pre></details><p class="disclaimer">请求成功不代表画面质量合格；请在画廊中人工判断生成内容。</p></section>
+        <section class="method"><div class="eyebrow">HOW IT WORKS</div><h3>每次只画一只鹈鹕</h3><p>任务使用已保存提示词，每次从独立新会话开始，生成一个用 SVG 绘制动画的 HTML。</p><ol><li><span>01</span> 每次请求都开启全新会话</li><li><span>02</span> 使用后台已保存的提示词</li><li><span>03</span> 每个任务只生成一个 HTML 动画</li><li><span>04</span> 状态只记录请求成功或失败</li></ol><details><summary>查看已保存提示词 <span aria-hidden="true">↗</span></summary><pre id="task-prompt">正在读取提示词…</pre></details><p class="disclaimer">请求成功不代表画面质量合格；请在画廊中人工判断生成内容。</p></section>
       </aside>
     </div>
-    <footer><span id="footer-frequency"><i class="dot"></i> 每 15 秒同步站点记录</span><span>PELICAN WATCH <span class="footer-divider">/</span> 每一次输出，都值得看见。</span><span class="footer-source"><a href="https://github.com/fishxcode/pelecanus" target="_blank" rel="noopener noreferrer">GitHub 源码 ↗</a><span class="footer-divider">/</span><span>Commit <code>__GIT_COMMIT__</code></span></span></footer>
+    <footer><span id="footer-frequency"><i class="dot"></i> 每秒读取服务端状态</span><span>PELICAN WATCH <span class="footer-divider">/</span> 每一次输出，都值得看见。</span><span class="footer-source"><a href="https://github.com/fishxcode/pelecanus" target="_blank" rel="noopener noreferrer">GitHub 源码 ↗</a><span class="footer-divider">/</span><span>Commit <code>__GIT_COMMIT__</code></span></span></footer>
   </main>
 
   <dialog id="detail-dialog" aria-labelledby="detail-title"><div class="dialog-head"><div><div class="eyebrow">RUN DETAILS</div><h2 id="detail-title">检测记录</h2></div><button class="icon-button" id="close-detail" aria-label="关闭详情">×</button></div><div id="detail-body"></div></dialog>

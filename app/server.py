@@ -33,13 +33,19 @@ SESSION_TTL = 30 * 24 * 60 * 60
 SESSION_COOKIE = "pelican_session"
 # ponytail: buffer SSE up to 16 MB; parse incrementally if concurrent streams strain memory.
 MAX_STREAM_RESPONSE = 16 * 1024 * 1024
+PROMPT = "创建一个HTML，内容是用SVG绘制一个鹈鹕骑自行车的2D动画，你不能进行任何测试，不能调用skills，不能网络检索，不能调用子智能体，直接生成"
 DEFAULTS = dict(base_url="codex://local", model="gpt-6-luna",
                 effort="low", protocol="codex", api_key="", enabled=False, next_run=None,
-                interval_minutes=30, timeout_seconds=600, max_output_tokens=16000, guest_enabled=False, retry_count=0, schedule_mode="single")
+                interval_seconds=1800, task_prompt=PROMPT, timeout_seconds=600, max_output_tokens=16000, guest_enabled=False, retry_count=0, schedule_mode="single")
 NODE_FIELDS = ("base_url", "api_key", "model", "effort", "protocol")
 MODEL_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 RUN_SELECT = "SELECT r.*, i.id AS library_image_id, i.content_type AS library_content_type, i.svg AS library_svg, i.created AS library_created FROM runs r LEFT JOIN image_library i ON i.run_id=r.id"
-PROMPT = "创建一个HTML，内容是用SVG绘制一个鹈鹕骑自行车的2D动画，你不能进行任何测试，不能调用skills，不能网络检索，不能调用子智能体，直接生成"
+
+def normalized_settings(saved):
+    saved = dict(saved)
+    if "interval_seconds" not in saved and "interval_minutes" in saved:
+        saved["interval_seconds"] = int(saved["interval_minutes"] * 60)
+    return dict(DEFAULTS, **{key: value for key, value in saved.items() if key in DEFAULTS})
 
 
 def model_combinations(models):
@@ -119,7 +125,18 @@ def redact(value, config):
 def validate_settings(values, old):
     if not isinstance(values, dict):
         raise ValueError("设置必须为 JSON 对象")
-    new = old.copy()
+    values = dict(values)
+    if "interval_minutes" in values and "interval_seconds" not in values:
+        minutes = values["interval_minutes"]
+        if type(minutes) is not int or not 1 <= minutes <= 1440:
+            raise ValueError("interval_minutes 必须为 1–1440 的整数")
+        values["interval_seconds"] = minutes * 60
+    new = dict(old, **normalized_settings(old))
+    if "task_prompt" in values:
+        prompt = values["task_prompt"]
+        if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 4000 or "\x00" in prompt:
+            raise ValueError("提示词必须为 1–4000 个字符，且不能全为空白")
+        new["task_prompt"] = prompt
     for key in ("base_url", "model", "effort", "protocol", "api_key"):
         if key in values:
             if not isinstance(values[key], str) or len(values[key]) > 4096:
@@ -160,7 +177,7 @@ def validate_settings(values, old):
             if not isinstance(values[key], bool):
                 raise ValueError("配置值必须为布尔值")
             new[key] = values[key]
-    for key, low, high in (("interval_minutes", 1, 1440), ("timeout_seconds", 10, 1800), ("max_output_tokens", 1024, 64000), ("retry_count", 0, 5)):
+    for key, low, high in (("interval_seconds", 1, 86400), ("timeout_seconds", 10, 1800), ("max_output_tokens", 1024, 64000), ("retry_count", 0, 5)):
         if key in values:
             if type(values[key]) is not int or not low <= values[key] <= high:
                 raise ValueError(f"{key} 必须为 {low}–{high} 的整数")
@@ -752,8 +769,7 @@ class Monitor:
                          FROM runs WHERE length(COALESCE(svg, '')) > 0""")
             db.execute("INSERT OR IGNORE INTO settings VALUES (1, ?)", (json.dumps(DEFAULTS),))
             saved_config = json.loads(db.execute("SELECT value FROM settings WHERE id=1").fetchone()[0])
-            saved_config = {key: value for key, value in saved_config.items() if key in DEFAULTS}
-            config = dict(DEFAULTS, **saved_config)
+            config = normalized_settings(saved_config)
             if not db.execute("SELECT 1 FROM nodes").fetchone():
                 db.execute("INSERT INTO nodes(name,base_url,api_key,model,effort,protocol,active,enabled) VALUES (?,?,?,?,?,?,1,1)",
                            ("默认节点", *(config[key] for key in NODE_FIELDS)))
@@ -798,9 +814,9 @@ class Monitor:
             if config["enabled"]:
                 last_finished = db.execute("SELECT MAX(finished) FROM runs").fetchone()[0]
                 if last_finished is not None:
-                    config["next_run"] = max(config["next_run"] or 0, last_finished + config["interval_minutes"] * 60)
+                    config["next_run"] = max(config["next_run"] or 0, last_finished + config["interval_seconds"])
                 elif config["next_run"] is None:
-                    config["next_run"] = time.time() + config["interval_minutes"] * 60
+                    config["next_run"] = time.time() + config["interval_seconds"]
                 self.store_settings(db, config)
         os.chmod(self.path, 0o600)
 
@@ -866,8 +882,7 @@ class Monitor:
     def settings(self, public=False):
         with self.db() as db:
             saved_config = json.loads(db.execute("SELECT value FROM settings WHERE id=1").fetchone()[0])
-            saved_config = {key: value for key, value in saved_config.items() if key in DEFAULTS}
-            config = dict(DEFAULTS, **saved_config)
+            config = normalized_settings(saved_config)
             node = db.execute("SELECT * FROM nodes WHERE active=1").fetchone()
             config.update({key: node[key] for key in NODE_FIELDS})
             group_name = db.execute("SELECT name FROM node_groups WHERE id=?", (node["group_id"],)).fetchone()[0] if node["group_id"] else ""
@@ -1080,10 +1095,10 @@ class Monitor:
                     if self.run_cancellations or db.execute("SELECT 1 FROM runs WHERE status='running'").fetchone():
                         config["next_run"] = None
                     elif not previous["enabled"] or config["schedule_mode"] != previous["schedule_mode"]:
-                        config["next_run"] = time.time() + config["interval_minutes"] * 60
-                    elif config["interval_minutes"] != previous["interval_minutes"] or config["next_run"] is None:
+                        config["next_run"] = time.time() + config["interval_seconds"]
+                    elif config["interval_seconds"] != previous["interval_seconds"] or config["next_run"] is None:
                         finished = db.execute("SELECT MAX(finished) FROM runs").fetchone()[0]
-                        config["next_run"] = (finished if finished is not None else time.time()) + config["interval_minutes"] * 60
+                        config["next_run"] = (finished if finished is not None else time.time()) + config["interval_seconds"]
                 db.execute("UPDATE nodes SET base_url=?,api_key=?,model=?,effort=?,protocol=? WHERE active=1", tuple(config[k] for k in NODE_FIELDS))
                 self.store_settings(db, config)
             if config["schedule_mode"] != previous["schedule_mode"] or not config["enabled"]:
@@ -1123,7 +1138,7 @@ class Monitor:
                 if source == "scheduled":
                     return None
                 raise ValueError("已有生成正在运行，请等待完成")
-            prompt = PROMPT
+            prompt = config["task_prompt"]
             row = db.execute("""INSERT INTO runs (started,status,source,model,base_url,effort,protocol,scene,nonce,prompt,test_version,tests,node_id,node_name,group_id,group_name,account_fingerprint,account_label)
                 VALUES (?,'running',?,?,?,?,?,?,?, ?,3,'{}',?,?,?,?,?,?)""",
                 (now, source, config["model"], config["base_url"], config["effort"], config["protocol"],
@@ -1142,6 +1157,22 @@ class Monitor:
             self.run_cancellations[run_id] = cancel_event
         threading.Thread(target=self.execute, args=(run_id, config, prompt, cancel_event), daemon=True).start()
         return run_id
+
+    def run_once(self):
+        """Submit one saved combination without enabling the scheduler."""
+        with self.lock, self.db() as db:
+            config = self.settings()
+            if config["enabled"]:
+                raise ValueError("请先暂停循环生成，再手动生成一次")
+            node_id = None
+            if config["schedule_mode"] == "groups":
+                node = db.execute("SELECT n.id FROM nodes n JOIN node_groups g ON g.id=n.group_id "
+                                  "WHERE n.enabled=1 AND g.enabled=1 AND (n.protocol='codex' OR length(trim(n.api_key))>0) "
+                                  "ORDER BY g.id,n.group_position,n.id LIMIT 1").fetchone()
+                if not node:
+                    raise ValueError("请先保存并启用一个模型组合")
+                node_id = node[0]
+            return self.start_run(node_id=node_id)
 
     def start_testing(self):
         """Start the saved single-model or group schedule immediately."""
@@ -1198,8 +1229,8 @@ class Monitor:
 
     def _schedule_after_finish(self, db, finished):
         # Read the current settings so edits or a stop during generation win.
-        config = json.loads(db.execute("SELECT value FROM settings WHERE id=1").fetchone()[0])
-        config["next_run"] = finished + config["interval_minutes"] * 60 if config["enabled"] else None
+        config = normalized_settings(json.loads(db.execute("SELECT value FROM settings WHERE id=1").fetchone()[0]))
+        config["next_run"] = finished + config["interval_seconds"] if config["enabled"] else None
         self.store_settings(db, config)
 
     def execute(self, run_id, config, prompt, cancel_event=None):
@@ -1240,10 +1271,11 @@ class Monitor:
         if parse.urlsplit(config["base_url"]).scheme != "https":
             raise ValueError("访客检测仅支持公网 HTTPS 地址")
         config["_guest"] = True
+        config["task_prompt"] = self.settings()["task_prompt"]
         host = parse.urlsplit(config["base_url"]).hostname or ""
         published = dict(id=secrets.token_hex(12), status="queued", submitted=time.time(), started=None, finished=None,
                          model=redact(config["model"], config), effort=config["effort"], protocol=config["protocol"],
-                         api_masked=mask(host), output="", svg="", error="", attempts=0, usage={})
+                         api_masked=mask(host), prompt=config["task_prompt"], output="", svg="", error="", attempts=0, usage={})
         return config, published
 
     def submit_guest(self, values):
@@ -1293,7 +1325,7 @@ class Monitor:
     def execute_guest(self, config, published):
         published.update(started=time.time(), status="running")
         self.store_guest(published)
-        result = perform_test(config, PROMPT, self.model_call)
+        result = perform_test(config, config["task_prompt"], self.model_call)
         published.update(status=result["status"], finished=result["finished"], output=result["output"], svg=result["svg"],
                          error=guest_error(result["error"]) if result["status"] == "error" else "",
                          attempts=result["attempts"], usage=result["usage"], returned_model=result["returned_model"])
@@ -1357,7 +1389,7 @@ class Monitor:
                     return None
                 if settings["next_run"] is None:
                     finished = db.execute("SELECT MAX(finished) FROM runs").fetchone()[0]
-                    settings["next_run"] = (finished if finished is not None else now) + settings["interval_minutes"] * 60
+                    settings["next_run"] = (finished if finished is not None else now) + settings["interval_seconds"]
                     self.store_settings(db, settings)
                 if settings["next_run"] > now:
                     return None
@@ -1382,7 +1414,7 @@ class Monitor:
 
     def scheduler(self):
         last_cleanup = 0
-        while not self.stopped.wait(2):
+        while not self.stopped.wait(.2):
             try:
                 now = time.time()
                 if now-last_cleanup > 60:
@@ -1638,6 +1670,12 @@ class Monitor:
         return result
 
     def state(self):
+        # All scheduling mutations use this same lock. Return one coherent
+        # database snapshot, never a client-side guess of the current state.
+        with self.lock:
+            return self._state_snapshot()
+
+    def _state_snapshot(self):
         now = time.time()
         with self.db() as db:
             rows = db.execute(RUN_SELECT + " WHERE r.started>=? ORDER BY r.id DESC", (now-86400,)).fetchall()
@@ -1645,7 +1683,7 @@ class Monitor:
         results = [self.serialize(r) for r in rows]
         metrics = self.stats()
         settings = self.settings(public=True)
-        public = {key: settings[key] for key in ("base_url", "model", "effort", "protocol", "enabled", "next_run", "interval_minutes", "guest_enabled", "node_name", "active_node_id", "schedule_mode")}
+        public = {key: settings[key] for key in ("base_url", "model", "effort", "protocol", "enabled", "next_run", "interval_seconds", "guest_enabled", "node_name", "active_node_id", "schedule_mode")}
         with self.lock:
             queued_ids = list(self.scheduled_queue)
             stopping = any(event.is_set() for event in self.run_cancellations.values())
@@ -1654,7 +1692,7 @@ class Monitor:
                 f"SELECT name FROM nodes WHERE id IN ({','.join('?' for _ in queued_ids)}) ORDER BY id", queued_ids
             ).fetchall(), 1)] if queued_ids else []
         return dict(settings=public, server_time=now,
-                    running=running[0] if running else None, stopping=stopping, queued_nodes=queued_nodes, timeline=results, task_prompt=PROMPT,
+                    running=running[0] if running else None, stopping=stopping, queued_nodes=queued_nodes, timeline=results, task_prompt=settings["task_prompt"],
                     stats=dict(total=metrics["total"], success=metrics["success"],
                                completed=metrics["completed"], errors=metrics["failed"],
                                cancelled=metrics["cancelled"], running=metrics["running"], rate=metrics["rate"]))
@@ -1787,7 +1825,7 @@ class Handler(BaseHTTPRequestHandler):
                         status.update(models=[], combinations=[], model_error=str(exc))
                     return self.send(status)
             if url.path == "/api/state":
-                return self.send(monitor.state())
+                return self.send(dict(monitor.state(), authenticated=self.authorized()))
             if url.path == "/api/runs":
                 params = parse.parse_qs(url.query)
                 include_account = self.authorized()
@@ -1831,7 +1869,7 @@ class Handler(BaseHTTPRequestHandler):
                     if not match[2]:
                         return self.send(monitor.serialize(row, detail=True, include_account=self.authorized()))
             return self.send({"error": "未找到记录"}, status=404)
-        files = {"/": "index.html", "/admin": "admin.html", "/admin/": "admin.html", "/admin.js": "admin.js", "/privacy.js": "privacy.js", "/previews.js": "previews.js", "/app.js": "app.js", "/style.css": "style.css", "/favicon.svg": "favicon.svg"}
+        files = {"/": "index.html", "/admin": "admin.html", "/admin/": "admin.html", "/admin.js": "admin.js", "/privacy.js": "privacy.js", "/live.js": "live.js", "/previews.js": "previews.js", "/app.js": "app.js", "/style.css": "style.css", "/favicon.svg": "favicon.svg"}
         name = files.get(url.path)
         if name:
             types = {"html": "text/html", "js": "text/javascript", "css": "text/css", "svg": "image/svg+xml"}
@@ -1923,7 +1961,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("请先确认初始化生成数据")
                 return self.send(self.server.monitor.reset_generation_data())
             if self.path == "/api/admin/run":
-                return self.send({"id": self.server.monitor.start_run()}, status=202)
+                return self.send({"id": self.server.monitor.run_once()}, status=202)
             if self.path == "/api/guest/run":
                 try:
                     result = self.server.monitor.submit_guest(values)

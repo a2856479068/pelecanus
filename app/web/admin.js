@@ -8,6 +8,7 @@ const selectedNodes = new Set();
 let codexModels = [], codexCombinations = [], codexFingerprint = '', codexRefreshing = false;
 let loopGroups = [], editingGroupId = null, groupBusy = false;
 let testingState = null, stoppingTests = false, batchCancelled = false;
+let formDirty = false, liveSignature = '', liveAuthLoading = false;
 const effortOrder = ['none','minimal','low','medium','high','xhigh','max','ultra'];
 const effortLabels = {none:'none · 无',minimal:'minimal · 极低',low:'low · 低',medium:'medium · 中',high:'high · 高',xhigh:'xhigh · 极高',max:'max · 最大',ultra:'ultra · 超高'};
 function derivedCombinations(models) {
@@ -236,7 +237,7 @@ function renderScheduleMode() {
   $('primary-model-settings').hidden = groups || config?.protocol !== 'codex';
   $('active-model-hint').hidden = groups;
   $('loop-mode-hint').hidden = !groups;
-  $('admin-run').hidden = groups;
+  $('admin-run').hidden = false;
   $('primary-model').required = !groups && config?.protocol === 'codex' && codexModels.length > 0;
   document.querySelector('.combo-panel').hidden = !groups;
 }
@@ -257,7 +258,7 @@ const labels = {success:'请求成功', error:'请求失败', cancelled:'手动�
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 privacy.bind(document);
 async function api(path, body) {
-  const response = await fetch(path, {method:body === undefined ? 'GET' : 'POST', credentials:'same-origin', headers:body === undefined ? {} : {'Content-Type':'application/json'}, ...(body === undefined ? {} : {body:JSON.stringify(body)})});
+  const response = await fetch(path, {cache:'no-store', method:body === undefined ? 'GET' : 'POST', credentials:'same-origin', headers:body === undefined ? {} : {'Content-Type':'application/json'}, ...(body === undefined ? {} : {body:JSON.stringify(body)})});
   if (response.status === 401 && !path.startsWith('/api/auth/')) {
     authenticated = false; $('logout').hidden = true;
     $('admin-content').hidden = true;
@@ -266,6 +267,7 @@ async function api(path, body) {
   }
   const data = await response.json().catch(() => ({error:`服务返回异常响应（HTTP ${response.status}），请刷新后重试`}));
   if (!response.ok) throw new Error(data.error || '操作失败');
+  if (body !== undefined) PelicanLive.invalidate();
   return data;
 }
 function message(text, error = false) { $('admin-message').textContent = text; $('admin-message').classList.toggle('error',error); }
@@ -279,8 +281,10 @@ function filteredNodes() {
 }
 function showConfig(data) {
   config = data;
+  formDirty = false;
   $('schedule-mode').value = config.schedule_mode || 'single';
-  $('interval').value = config.interval_minutes;
+  $('interval').value = config.interval_seconds;
+  $('task-prompt-editor').value = config.task_prompt;
   $('timeout').value = config.timeout_seconds;
   $('retry-count').value = config.retry_count;
   $('max-tokens').value = config.max_output_tokens;
@@ -313,13 +317,14 @@ function updateModelDraftHint() {
   updateQuickRunButton();
 }
 function updateQuickRunButton() {
-  const running = testingState?.running || nodes.some(node => node.last_run?.status === 'running');
+  const running = testingState?.running;
   const stopping = stoppingTests || testingState?.stopping;
-  $('admin-run').disabled = busy || stopping || !config?.has_key || running || hasUnsavedModelSettings() || config?.schedule_mode === 'groups';
-  $('admin-run').title = hasUnsavedModelSettings() ? '先保存模型设置，再开始生成' : '';
-  $('admin-start').disabled = busy || stopping || !config || Boolean(running) || config.enabled;
-  $('admin-stop').disabled = stoppingTests || !config || !(running || config.enabled || testingState?.queued_nodes?.length || stopping);
-  $('admin-stop').textContent = stopping ? '正在停止…' : '停止测试';
+  const offline = !PelicanLive.fresh();
+  $('admin-run').disabled = offline || busy || stopping || (!config?.has_key && config?.schedule_mode !== 'groups') || Boolean(running) || config?.enabled;
+  $('admin-run').title = config?.enabled ? '请先暂停循环，再手动生成一次' : '保存设置并只生成一张';
+  $('admin-start').disabled = offline || busy || stopping || !config || Boolean(running) || config.enabled;
+  $('admin-stop').disabled = offline || stoppingTests || !config || !(running || config.enabled || testingState?.queued_nodes?.length || stopping);
+  $('admin-stop').textContent = stopping ? '正在暂停…' : '暂停生成';
   $('database-reset').disabled = busy || Boolean(running) || Boolean(stopping);
 }
 function renderNodes() {
@@ -360,7 +365,9 @@ function historyOptions(id, items) {
 }
 function recordDuration(run) {
   if (!run.started || (!run.finished && run.status !== 'running')) return '—';
-  const seconds = Math.max(0, (run.finished || testingState?.server_time || Date.now()/1000) - run.started);
+  const end = run.finished || PelicanLive.now();
+  if (end == null) return '待同步';
+  const seconds = Math.max(0, end - run.started);
   return seconds < 60 ? `${seconds.toFixed(1)} 秒` : `${Math.floor(seconds / 60)} 分 ${Math.floor(seconds % 60)} 秒`;
 }
 function updateHistorySelection() {
@@ -393,7 +400,7 @@ function renderRunMonitor() {
   const active = testingState?.timeline.find(run => run.id === testingState.running);
   const summary = testingState?.stopping ? '正在停止测试…' : active ? `正在生成 #${active.id} · ${active.model} · ${active.effort}` : config?.enabled ? '等待下一轮测试' : '测试已暂停';
   const queued = testingState?.queued_nodes?.length || 0;
-  $('admin-run-progress').textContent = summary + (queued ? ` · 排队 ${queued} 项` : '');
+  $('admin-run-progress').textContent = PelicanLive.fresh() ? summary + (active ? ` · 已耗时 ${recordDuration(active)}` : '') + (queued ? ` · 排队 ${queued} 项` : '') : '服务未连接，任务状态待确认';
   const statItems = runStats ? [['请求成功率',runStats.rate === null ? '—' : `${runStats.rate}%`],['已完成请求',runStats.completed],['请求成功',runStats.success],['请求失败',runStats.failed],['手动取消',runStats.cancelled],['正在生成',runStats.running]] : [];
   $('admin-stats').innerHTML = statItems.map(([name,value]) => `<div><span>${name}</span><strong>${value}</strong></div>`).join('');
   const signature = JSON.stringify([runHistory, codexFingerprint]);
@@ -403,7 +410,7 @@ function renderRunMonitor() {
       const account = run.protocol !== 'codex' ? 'API 节点' : run.account_label || '账号未记录';
       const current = run.account_fingerprint && run.account_fingerprint === codexFingerprint;
       const inProgress = ['running','queued'].includes(run.status);
-      return `<tr><td data-label="记录"><label class="record-check"><input type="checkbox" data-select-history="${run.id}" aria-label="选择记录 #${run.id}" ${inProgress || run.favorite ? 'disabled' : ''}><b>#${run.id}</b></label><time>${dateTime(run.started)}</time></td><td data-label="账号"><span class="record-account">${escapeHTML(account)}</span>${current ? '<small class="current-account">当前账号</small>' : ''}${run.protocol === 'codex' && !run.account_fingerprint ? '<small>无法追溯账号</small>' : ''}</td><td data-label="模型"><b>${escapeHTML(run.model)}</b><small>${escapeHTML(run.effort)} · ${run.protocol === 'codex' ? '本机 Codex' : run.protocol === 'responses' ? 'Responses' : 'Chat Completions'}</small></td><td data-label="来源"><span>${escapeHTML(run.group_name || '单个模型')}</span><small>${({manual:'手动测试',scheduled:'定时测试',retry:'失败重试'})[run.source] || '历史记录'} · ${escapeHTML(run.node_name || '历史节点')}</small></td><td data-label="结果"><span class="badge ${escapeHTML(run.status)}">${escapeHTML(labels[run.status] || run.status)}</span><small>${inProgress ? '已耗时' : '耗时'} ${recordDuration(run)}</small>${run.error ? `<details class="record-error"><summary>失败原因</summary><p>${escapeHTML(run.error)}</p></details>` : ''}</td><td data-label="操作"><span class="record-assets">${[run.has_html ? 'HTML' : '', run.has_svg ? 'SVG' : ''].filter(Boolean).join(' · ') || (inProgress ? '等待输出' : '无可预览作品')}</span><div class="record-actions"><a class="button secondary" href="/?run=${run.id}" target="_blank" rel="noopener">查看输出 ↗</a>${run.status === 'error' ? `<button class="button secondary" type="button" data-retry="${run.id}">重试</button>` : ''}${run.has_svg ? `<a class="button secondary" href="/api/runs/${run.id}/svg?download=1" download="${escapeHTML(run.filename)}" title="脚本动画请用浏览器单独打开 SVG；图片预览可能不播放动画">下载 SVG ↓</a>` : ''}${!inProgress ? `<button class="button secondary favorite-button" data-favorite-run="${run.id}" aria-pressed="${Boolean(run.favorite)}">${run.favorite ? '★ 取消收藏' : '☆ 收藏'}</button><button class="button secondary delete-art-button" type="button" data-delete-run="${run.id}" ${run.favorite ? 'disabled' : ''}>${run.favorite ? '已收藏 · 不可删除' : '删除'}</button>` : ''}</div></td></tr>`;
+      return `<tr><td data-label="记录"><label class="record-check"><input type="checkbox" data-select-history="${run.id}" aria-label="选择记录 #${run.id}" ${inProgress || run.favorite ? 'disabled' : ''}><b>#${run.id}</b></label><time>${dateTime(run.started)}</time></td><td data-label="账号"><span class="record-account">${escapeHTML(account)}</span>${current ? '<small class="current-account">当前账号</small>' : ''}${run.protocol === 'codex' && !run.account_fingerprint ? '<small>无法追溯账号</small>' : ''}</td><td data-label="模型"><b>${escapeHTML(run.model)}</b><small>${escapeHTML(run.effort)} · ${run.protocol === 'codex' ? '本机 Codex' : run.protocol === 'responses' ? 'Responses' : 'Chat Completions'}</small></td><td data-label="来源"><span>${escapeHTML(run.group_name || '单个模型')}</span><small>${({manual:'手动测试',scheduled:'定时测试',retry:'失败重试'})[run.source] || '历史记录'} · ${escapeHTML(run.node_name || '历史节点')}</small></td><td data-label="结果"><span class="badge ${escapeHTML(run.status)}">${escapeHTML(labels[run.status] || run.status)}</span><small data-live-duration="${run.id}">${inProgress ? '已耗时' : '耗时'} ${recordDuration(run)}</small>${run.error ? `<details class="record-error"><summary>失败原因</summary><p>${escapeHTML(run.error)}</p></details>` : ''}</td><td data-label="操作"><span class="record-assets">${[run.has_html ? 'HTML' : '', run.has_svg ? 'SVG' : ''].filter(Boolean).join(' · ') || (inProgress ? '等待输出' : '无可预览作品')}</span><div class="record-actions"><a class="button secondary" href="/?run=${run.id}" target="_blank" rel="noopener">查看输出 ↗</a>${run.status === 'error' ? `<button class="button secondary" type="button" data-retry="${run.id}">重试</button>` : ''}${run.has_svg ? `<a class="button secondary" href="/api/runs/${run.id}/svg?download=1" download="${escapeHTML(run.filename)}" title="脚本动画请用浏览器单独打开 SVG；图片预览可能不播放动画">下载 SVG ↓</a>` : ''}${!inProgress ? `<button class="button secondary favorite-button" data-favorite-run="${run.id}" aria-pressed="${Boolean(run.favorite)}">${run.favorite ? '★ 取消收藏' : '☆ 收藏'}</button><button class="button secondary delete-art-button" type="button" data-delete-run="${run.id}" ${run.favorite ? 'disabled' : ''}>${run.favorite ? '已收藏 · 不可删除' : '删除'}</button>` : ''}</div></td></tr>`;
     }).join('')}</tbody></table>` : '<div class="history-empty">没有符合筛选条件的生成记录。</div>';
   }
   updateHistorySelection();
@@ -412,24 +419,16 @@ async function refreshRuns(page = historyPage) {
   const sequence = ++historySequence;
   historyLoading = true; updateHistorySelection();
   try {
-    const [fresh, stats, currentState] = await Promise.all([api(`/api/admin/runs?${historyQuery(page)}`), api('/api/admin/stats'), api('/api/state')]);
+    const [fresh, currentState] = await Promise.all([api(`/api/admin/runs?${historyQuery(page)}`), api('/api/state')]);
     if (sequence !== historySequence) return;
-    testingState = currentState;
-    if (config) {
-      if ($('admin-enabled').checked === config.enabled) $('admin-enabled').checked = currentState.settings.enabled;
-      config.enabled = currentState.settings.enabled;
-      config.next_run = currentState.settings.next_run;
-      $('admin-status').textContent = currentState.stopping ? '正在停止测试…' : `${config.schedule_mode === 'groups' ? '循环组' : '单个模型'} · ${config.enabled ? '测试已开始' : '测试已停止'}`;
-      $('admin-status').className = `badge ${config.enabled ? 'success' : 'neutral'}`;
-      $('admin-next').textContent = config.enabled ? (config.next_run == null ? '生成结束后计时' : dateTime(config.next_run)) : '尚未启用';
-    }
+    applyServerState(currentState);
     runHistory = fresh.items;
     historyPage = fresh.page; historyPages = fresh.pages; historyTotal = fresh.total;
     historyOptions('history-account', [{value:'all',label:'全部账号 / 接入方式'}, ...fresh.accounts.map(account => ({value:account.value,label:`${account.label}（${account.count} 条）`})), {value:'unknown',label:'账号未记录'}, {value:'api',label:'API 节点'}]);
     historyOptions('history-model', [{value:'all',label:'全部模型'}, ...fresh.models.map(model => ({value:model,label:model}))]);
     historyOptions('history-group', [{value:'all',label:'全部循环组'}, {value:'single',label:'单个模型 / 历史记录'}, ...fresh.groups.map(group => ({value:group,label:group}))]);
     runHistory.filter(run => run.favorite || ['running','queued'].includes(run.status)).forEach(run => selectedHistory.delete(run.id));
-    runStats = stats;
+    runStats = {...testingState.stats, failed:testingState.stats.errors};
     renderRunMonitor(); updateQuickRunButton();
   } finally {
     if (sequence === historySequence) { historyLoading = false; updateHistorySelection(); }
@@ -531,7 +530,7 @@ async function action(fn) {
   finally { busy = false; $('admin-save').disabled = false; renderNodes(); updateHistorySelection(); }
 }
 function formSettings() {
-  const values = {schedule_mode:$('schedule-mode').value,retry_count:Number($('retry-count').value),interval_minutes:Number($('interval').value), timeout_seconds:Number($('timeout').value), max_output_tokens:Number($('max-tokens').value), enabled:$('admin-enabled').checked, guest_enabled:$('guest-enabled').checked};
+  const values = {task_prompt:$('task-prompt-editor').value,schedule_mode:$('schedule-mode').value,retry_count:Number($('retry-count').value),interval_seconds:Number($('interval').value), timeout_seconds:Number($('timeout').value), max_output_tokens:Number($('max-tokens').value), guest_enabled:$('guest-enabled').checked};
   if (config?.protocol === 'codex' && values.schedule_mode === 'single') Object.assign(values, {model:$('primary-model').value || config.model, effort:$('primary-effort').value});
   return values;
 }
@@ -546,6 +545,8 @@ $('admin-form').addEventListener('submit', event => {
   });
 });
 $('admin-run').addEventListener('click', () => action(async () => {
+  if (!$('admin-form').reportValidity()) return;
+  showConfig(await api('/api/admin/settings', formSettings()));
   const result = await api('/api/admin/run',{});
   await Promise.all([refreshNodes(), refreshRuns()]);
   message(`生成任务 #${result.id} 已提交，可在公开页面查看结果。`);
@@ -554,7 +555,6 @@ $('admin-start').addEventListener('click', () => {
   if (!$('admin-form').reportValidity()) return;
   action(async () => {
     const values = formSettings();
-    values.enabled = false;
     showConfig(await api('/api/admin/settings', values));
     showConfig(await api('/api/admin/testing/start', {}));
     await refreshRuns();
@@ -565,7 +565,7 @@ $('admin-stop').addEventListener('click', async () => {
   if (stoppingTests) return;
   stoppingTests = true; batchCancelled = true; updateQuickRunButton();
   try {
-    showConfig(await api('/api/admin/testing/stop', {}));
+    await api('/api/admin/testing/stop', {});
     await Promise.all([refreshNodes(), refreshRuns()]);
     message('已停止测试：当前任务已取消，排队已清空，定时测试已暂停。');
   } catch (error) { message(error.message, true); }
@@ -730,7 +730,8 @@ $('bulk-run').addEventListener('click', () => action(async () => {
   }
   selectedNodes.clear(); $('select-all-nodes').checked = false; await refreshRuns(); await refreshNodes(); message(`已提交 ${started} 个节点的检测${failed ? `，${failed} 个节点提交失败` : ''}；服务会按单实例锁顺序执行。`, failed > 0);
 }));
-load();
+liveAuthLoading = true;
+load().finally(() => { liveAuthLoading = false; });
 setInterval(() => { if (authenticated && !busy && !$('node-dialog').open) Promise.all([refreshNodes(), refreshRuns(), ...(groupBusy ? [] : [refreshGroups()])]).catch(error => message(error.message,true)); }, 5000);
 setInterval(() => { if (authenticated && !busy && !$('node-dialog').open) refreshCodex(); }, 30000);
 
@@ -741,4 +742,51 @@ window.addEventListener('focus', async () => {
     if (Boolean(status.authenticated) !== authenticated) await load();
     else if (authenticated) void refreshCodex();
   } catch { /* The next request reports a connection error. */ }
+});
+
+$('admin-form').addEventListener('input', () => { formDirty = true; });
+$('admin-form').addEventListener('change', () => { formDirty = true; });
+function applyServerState(value) {
+  if (testingState && value.server_time < testingState.server_time) return;
+  testingState = value;
+  if (!config || !authenticated) return;
+  const changed = Object.keys(value.settings).some(key => config[key] !== value.settings[key]) || config.task_prompt !== value.task_prompt;
+  if (changed && !formDirty && !busy) showConfig({...config, ...value.settings, task_prompt:value.task_prompt});
+  config.enabled = value.settings.enabled;
+  config.next_run = value.settings.next_run;
+  $('admin-enabled').checked = value.settings.enabled;
+  $('admin-status').textContent = value.stopping ? '正在暂停…' : value.running ? '正在生成' : value.settings.enabled ? '循环已开启 · 等待下一轮' : '生成已暂停';
+  $('admin-status').className = `badge ${value.running ? 'running' : value.settings.enabled ? 'success' : 'neutral'}`;
+  const left = value.settings.next_run == null ? null : Math.max(0, Math.ceil(value.settings.next_run - value.server_time));
+  $('admin-next').textContent = value.stopping ? '正在暂停' : value.running ? '生成结束后计时' : value.settings.enabled ? (left === null ? '等待服务端调度' : `${dateTime(value.settings.next_run)} · 剩余 ${left} 秒`) : '尚未启用';
+  runStats = {...value.stats, failed:value.stats.errors};
+  renderRunMonitor(); updateQuickRunButton();
+  for (const element of document.querySelectorAll('[data-live-duration]')) {
+    const id = Number(element.dataset.liveDuration);
+    const run = value.timeline.find(run => run.id === id) || runHistory.find(run => run.id === id);
+    if (run) element.textContent = `${run.status === 'running' ? '已耗时' : '耗时'} ${recordDuration(run)}`;
+  }
+}
+PelicanLive.start(value => {
+  $('admin-sync').textContent = '已连接 · 每秒从服务端同步状态';
+  applyServerState(value);
+  if (value.authenticated !== authenticated && !liveAuthLoading) {
+    liveAuthLoading = true;
+    load().finally(() => { liveAuthLoading = false; });
+  }
+  const signature = JSON.stringify([value.authenticated, value.running, value.stopping, value.settings, value.timeline.map(run => [run.id,run.status,run.finished,run.favorite])]);
+  if (signature !== liveSignature) {
+    if (authenticated && !historyLoading && !busy) {
+      liveSignature = signature;
+      Promise.all([refreshRuns(), refreshNodes()]).catch(error => message(error.message,true));
+    }
+  }
+}, () => {
+  $('admin-sync').textContent = '服务连接中断 · 状态待确认';
+  $('admin-status').textContent = '状态待同步';
+  $('admin-next').textContent = '连接恢复后同步';
+  document.querySelectorAll('[data-live-duration]').forEach(element => {
+    if (testingState?.timeline.find(run => run.id === Number(element.dataset.liveDuration))?.status === 'running') element.textContent = '耗时待同步';
+  });
+  renderRunMonitor(); updateQuickRunButton();
 });
