@@ -87,7 +87,7 @@ function renderRunMonitor() {
   const summary = testingState?.stopping ? '正在停止测试…' : active ? `正在生成 #${active.id} · ${active.model} · ${active.effort}` : testingState?.settings.enabled ? '等待下一轮测试' : '测试已暂停';
   const queued = testingState?.queued_nodes?.length || 0;
   $('admin-run-progress').textContent = PelicanLive.fresh() ? summary + (active ? ` · 已耗时 ${recordDuration(active)}` : '') + (queued ? ` · 排队 ${queued} 项` : '') : '服务未连接，任务状态待确认';
-  const statItems = runStats ? [['请求成功率',runStats.rate === null ? '—' : `${runStats.rate}%`],['已完成请求',runStats.completed],['请求成功',runStats.success],['请求失败',runStats.failed],['手动取消',runStats.cancelled],['正在生成',runStats.running]] : [];
+  const statItems = runStats ? [['请求成功率',runStats.rate === null ? '—' : `${runStats.rate}%`],['请求总数（成功 + 失败）',runStats.total],['请求成功',runStats.success],['请求失败',runStats.failed],['手动取消（不计入）',runStats.cancelled],['生成中 / 排队（不计入）',runStats.running]] : [];
   $('admin-stats').innerHTML = statItems.map(([name,value]) => `<div><span>${name}</span><strong>${value}</strong></div>`).join('');
   const signature = JSON.stringify([runHistory, codexFingerprint]);
   if ($('admin-run-history').dataset.signature !== signature) {

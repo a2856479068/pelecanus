@@ -283,7 +283,6 @@ function renderState() {
   $('rate-note').textContent = s.completed ? `${s.success} / ${s.completed} 次已完成请求成功 · 含已删除作品` : '等待第一份请求结果';
   $('total').innerHTML = `${s.total}<small>次</small>`;
   $('errors').innerHTML = `${s.errors}<small>次</small>`;
-  $('error-note').textContent = `请求失败 ${s.errors} · 手动取消 ${s.cancelled || 0}`;
   const grouped = config.schedule_mode === 'groups';
   $('model-title').textContent = grouped ? '循环组' : config.model;
   $('site-name').textContent = grouped ? '按组与组合顺序独立生成' : `${config.node_name || '单个模型'} · ${config.base_url}`;

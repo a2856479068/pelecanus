@@ -15,8 +15,8 @@
       <div class="content">
         <section class="stats" aria-label="最近24小时统计">
           <article class="stat"><div class="stat-label">请求成功率 <span>24H</span></div><strong id="rate" class="green">—<small>%</small></strong><div class="meter"><span id="rate-meter"></span></div><p id="rate-note">等待第一份生成结果</p></article>
-          <article class="stat"><div class="stat-label">请求总数 <span>24H</span></div><strong id="total">0<small>次</small></strong><p>包含正在生成和手动取消的请求</p></article>
-          <article class="stat"><div class="stat-label">请求失败 <span>24H</span></div><strong id="errors">0<small>次</small></strong><p id="error-note">请求失败 0</p></article>
+          <article class="stat"><div class="stat-label">请求总数 <span>24H</span></div><strong id="total">0<small>次</small></strong><p>成功 + 失败；取消、生成中和排队均不计入</p></article>
+          <article class="stat"><div class="stat-label">请求失败 <span>24H</span></div><strong id="errors">0<small>次</small></strong><p>手动取消不计为失败</p></article>
           <article class="stat countdown"><div class="stat-label"><i class="dot"></i> 距离下次生成</div><strong id="countdown">— : —</strong><p id="schedule-note">站点自动检测尚未启用</p></article>
         </section>
 

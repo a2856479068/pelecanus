@@ -217,7 +217,7 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
         self.monitor.delete_runs(selected, account=account_a)
         remaining = self.monitor.gallery(include_account=True)['items']
         self.assertEqual({item['id'] for item in remaining}, {wanted[0], unknown, api_run, *other})
-        self.assertEqual(self.monitor.stats()['total'], 29)
+        self.assertEqual(self.monitor.stats()['total'], 28)
 
     def test_interval_begins_after_a_long_generation_finishes(self):
         entered, release = threading.Event(), threading.Event()
@@ -305,22 +305,66 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
         interrupted = self.seed(status='running')
         before = self.monitor.stats()
         self.assertEqual((before['total'], before['completed'], before['success'], before['failed'], before['rate']),
-                         (4, 3, 2, 1, 66.7))
+                         (3, 3, 2, 1, 66.7))
         self.monitor.delete_runs(successful[:1] + failed)
         self.assertEqual(self.monitor.stats()['rate'], 66.7)
         self.assertEqual(self.monitor.state()['stats']['rate'], 66.7)
         self.monitor.stop_run(interrupted[0])
         after_stop = self.monitor.stats()
         self.assertEqual((after_stop['total'], after_stop['completed'], after_stop['cancelled'], after_stop['failed']),
-                         (4, 3, 1, 1))
+                         (3, 3, 1, 1))
         self.monitor.delete_runs(successful[1:] + interrupted)
         self.assertEqual(self.monitor.gallery()['total'], 0)
         restarted = Monitor(self.folder.name)
+        self.assertEqual(restarted.stats()['total'], 3)
+        self.assertEqual(restarted.state()['stats']['total'], 3)
         self.assertEqual(restarted.stats()['rate'], 66.7)
         with restarted.db() as db:
             db.execute('UPDATE run_outcomes SET started=? WHERE run_id=?',
                        (time.time() - 86400 - 5, failed[0]))
         self.assertEqual(restarted.stats()['rate'], 100.0)
+        self.assertEqual(restarted.stats()['total'], 2)
+
+    def test_request_counts_only_include_success_and_error_as_results_arrive(self):
+        active = self.seed(status='running')[0]
+        queued = self.seed(status='queued')[0]
+        cancelled = self.seed(status='cancelled')[0]
+
+        def assert_counts(total, success, failed, cancelled_count, running, rate):
+            stats = self.monitor.stats()
+            self.assertEqual((stats['total'], stats['completed'], stats['success'], stats['failed'],
+                              stats['cancelled'], stats['running'], stats['rate']),
+                             (total, total, success, failed, cancelled_count, running, rate))
+            public = self.monitor.state()['stats']
+            self.assertEqual((public['total'], public['completed'], public['success'], public['errors'], public['rate']),
+                             (total, total, success, failed, rate))
+
+        assert_counts(0, 0, 0, 1, 2, None)
+        with self.monitor.db() as db:
+            db.execute("UPDATE runs SET status='success' WHERE id=?", (active,))
+        assert_counts(1, 1, 0, 1, 1, 100.0)
+        with self.monitor.db() as db:
+            db.execute("UPDATE runs SET status='running' WHERE id=?", (queued,))
+        assert_counts(1, 1, 0, 1, 1, 100.0)
+        with self.monitor.db() as db:
+            db.execute("UPDATE runs SET status='error' WHERE id=?", (queued,))
+            db.execute("UPDATE runs SET status='error' WHERE id=?", (queued,))
+        assert_counts(2, 1, 1, 1, 0, 50.0)
+        self.monitor.delete_runs([cancelled])
+        assert_counts(2, 1, 1, 1, 0, 50.0)
+
+    def test_request_count_uses_the_same_24_hour_window_as_success_rate(self):
+        now = time.time()
+        with self.monitor.db() as db:
+            db.executemany('INSERT INTO run_outcomes(run_id,started,status) VALUES (?,?,?)',
+                           [(1, now - 86400 - .001, 'error'), (2, now - 86400, 'success'),
+                            (3, now - 1, 'error'), (4, now - 1, 'cancelled')])
+        with patch('server.time.time', return_value=now):
+            stats = self.monitor.stats()
+            self.assertEqual((stats['total'], stats['completed'], stats['rate']), (2, 2, 50.0))
+        with patch('server.time.time', return_value=now + .001):
+            stats = self.monitor.stats()
+            self.assertEqual((stats['total'], stats['completed'], stats['rate']), (1, 1, 0.0))
 
     def test_reused_run_number_keeps_both_request_outcomes(self):
         first = self.seed()[0]

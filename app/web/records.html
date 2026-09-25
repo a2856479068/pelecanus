@@ -9,7 +9,7 @@
     <div id="records-content" hidden>
       <section id="run-records" class="panel records-panel" aria-labelledby="run-monitor-title">
         <div class="records-heading"><div><div class="eyebrow">GENERATION HISTORY</div><h2 id="run-monitor-title">生成记录</h2><p>按账号、模型和循环组查找作品，查看请求结果并批量管理。</p></div><button id="history-refresh" class="button secondary" type="button">刷新记录</button></div>
-        <p class="record-account-note">新记录标记请求开始时的个人账号和脱敏邮箱。旧版工作区标记无法区分具体用户，不自动归给当前账号；更早记录显示“账号未记录”。API 节点不对应 ChatGPT 账号。删除作品后仍保留最少的时间与结果用于统计，成功率按请求成功 ÷（成功＋失败）计算；手动取消不计入。迁移前已删除且没有备份的请求无法追溯。</p>
+        <p class="record-account-note">新记录标记请求开始时的个人账号和脱敏邮箱。旧版工作区标记无法区分具体用户，不自动归给当前账号；更早记录显示“账号未记录”。API 节点不对应 ChatGPT 账号。删除作品后仍保留最少的时间与结果用于统计。请求总数＝成功＋失败，成功率＝成功 ÷ 请求总数；手动取消、生成中和排队均不计入总数和成功率。迁移前已删除且没有备份的请求无法追溯。</p>
         <div class="records-stats-heading">最近 24 小时 · 站点已追踪请求（含已删除作品）</div><div id="admin-stats" class="admin-stats" aria-label="最近 24 小时统计"></div>
         <div id="admin-run-progress" class="admin-run-progress" role="status" aria-live="polite">暂无测试任务。</div>
         <div class="history-filters">

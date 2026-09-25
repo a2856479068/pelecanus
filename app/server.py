@@ -1495,7 +1495,9 @@ class Monitor:
                                        "AND (n.protocol='codex' OR length(trim(n.api_key))>0)").fetchone()[0]
         success, failed = counts.get("success", 0), counts.get("error", 0)
         completed = success + failed
-        return dict(window_hours=24, total=sum(counts.values()), success=success,
+        # The displayed total and success-rate denominator use the same outcomes.
+        # Cancelled and unfinished requests remain separate diagnostic counts.
+        return dict(window_hours=24, total=completed, success=success,
                     completed=completed, failed=failed, cancelled=counts.get("cancelled", 0),
                     running=counts.get("running", 0) + counts.get("queued", 0),
                     rate=round(success / completed * 100, 1) if completed else None,
