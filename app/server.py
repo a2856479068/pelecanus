@@ -1729,7 +1729,12 @@ class Handler(BaseHTTPRequestHandler):
             policy = "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
         self.send_header("Content-Security-Policy", policy)
         self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            # A browser may cancel a stale poll while refreshing or navigating.
+            # The request is already over; do not print a misleading traceback.
+            return
 
     def bearer_token(self):
         scheme, _, token = self.headers.get("Authorization", "").partition(" ")
